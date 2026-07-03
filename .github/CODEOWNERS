@@ -1,0 +1,22 @@
+# CODEOWNERS — shared review authority for beaterOS
+#
+# Every path is owned by the shared owner so that a review can always be routed
+# and NO file is owned only by the agent that wrote it. Per AGENTS.md §5, every
+# listed reviewer has full authority over the whole tree — read, review, request
+# changes, and (when not the author) merge.
+#
+# NOTE (honesty boundary, AGENTS.md §7): all agents currently act as the human
+# account @jadenfix, so GitHub cannot attribute ownership to a specific *agent*.
+# This file routes review to the shared human owner; per-agent authority is
+# attested in the coordination ledger, not enforced by GitHub identity. If
+# per-agent signing identities are added later (final.md §7.1), add them here.
+
+# Default owner for everything.
+*                       @jadenfix
+
+# Process + governance surfaces: changes here alter how every agent collaborates,
+# so they should get extra scrutiny (still the same shared owner today).
+/AGENTS.md              @jadenfix
+/CONTRIBUTING.md        @jadenfix
+/docs/coordination.md   @jadenfix
+/.github/               @jadenfix

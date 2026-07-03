@@ -1,0 +1,97 @@
+name: PR Governance
+
+# Enforces the multi-agent contribution contract (AGENTS.md) with checks that
+# run OUTSIDE any agent's judgement — mirroring beaterOS's "policy outside the
+# model" principle (final.md §8.12).
+#
+# What it CAN check (structural, deterministic):
+#   - the PR body contains the agent-routing trailer
+#   - Author-Agent is filled in (not the placeholder)
+#   - Merged-By does not declare a self-merge (Merged-By == Author-Agent)
+#   - the review-routing checklist is present
+#
+# What it CANNOT check (honesty boundary, AGENTS.md §7): whether the declared
+# agent ids are truthful. All agents act as the same GitHub account, so identity
+# here is attested, not cryptographically verified.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  routing:
+    name: Agent routing + no self-merge
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate agent-routing trailer
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = pr.body || "";
+
+            const fail = (msg) => core.setFailed(msg);
+            const problems = [];
+
+            // Extract "Key: value" from the routing trailer, case-insensitive.
+            const field = (name) => {
+              const m = body.match(new RegExp("^\\s*" + name + "\\s*:\\s*(.+?)\\s*$", "im"));
+              return m ? m[1].trim() : null;
+            };
+
+            const author = field("Author-Agent");
+            const reviewer = field("Reviewer-Agent");
+            const mergedBy = field("Merged-By");
+
+            const isPlaceholder = (v) =>
+              !v || /^<.*>$/.test(v) || v.toLowerCase() === "pending";
+
+            if (author === null && reviewer === null && mergedBy === null) {
+              problems.push(
+                "Missing agent-routing trailer. Add the block from AGENTS.md §4:\n" +
+                "  Author-Agent: <agent-id>\n" +
+                "  Reviewer-Agent: <agent-id or \"pending\">\n" +
+                "  Merged-By: <agent-id / \"human:@handle\" / \"pending\">"
+              );
+            }
+
+            if (isPlaceholder(author)) {
+              problems.push("Author-Agent must be filled in (not a placeholder).");
+            }
+
+            // Self-merge guard: only fails when Merged-By is concrete AND equals Author.
+            if (
+              author && mergedBy &&
+              !isPlaceholder(author) && !isPlaceholder(mergedBy) &&
+              author.toLowerCase() === mergedBy.toLowerCase()
+            ) {
+              problems.push(
+                `Self-merge declared: Merged-By ("${mergedBy}") equals Author-Agent ` +
+                `("${author}"). Per AGENTS.md, the author must never merge their own PR — ` +
+                `hand off to a different agent or the human owner.`
+              );
+            }
+
+            // Nudge (not a failure) if review routing checklist is absent.
+            if (!/review routing/i.test(body)) {
+              core.warning(
+                "No 'Review routing' section found. Confirm an independent agent " +
+                "will review and a non-author will merge (AGENTS.md §3.5–§3.6)."
+              );
+            }
+
+            if (problems.length) {
+              fail("PR governance check failed:\n- " + problems.join("\n- "));
+            } else {
+              core.info(
+                "Agent routing OK.\n" +
+                `  Author-Agent:   ${author || "(unset)"}\n` +
+                `  Reviewer-Agent: ${reviewer || "(unset)"}\n` +
+                `  Merged-By:      ${mergedBy || "(unset)"}\n` +
+                "Reminder: identity is attested, not verified (AGENTS.md §7)."
+              );
+            }
