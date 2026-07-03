@@ -1,0 +1,9 @@
+{
+  "review_id": "review://push-approval",
+  "action_id": "act://git-push",
+  "manifest_hash": "bb1c37d019558cfa4b4ffcbfa7724e6c88d992d8393f95b467550b6df91d507a",
+  "grant_id": "grant://push-origin",
+  "reviewer_id": "user://jaden",
+  "approved_at": "2026-07-03T21:00:05Z",
+  "policy_version": "policy-2026.07.0"
+}

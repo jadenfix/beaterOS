@@ -1,0 +1,15 @@
+{
+  "mandate_id": "mandate://ci-minutes",
+  "issuer": "user://jaden",
+  "holder": "agent://claude/coder-1",
+  "session_id": "sess://01J-readme-fix",
+  "rail": "fake-rail://test",
+  "asset": "USD",
+  "max_minor_units": 2000,
+  "counterparty_policy": "allowlist:ci-provider",
+  "purpose": "Purchase CI minutes to run the test suite.",
+  "expires_at": "2026-07-03T22:00:00Z",
+  "approval_threshold_minor_units": 500,
+  "idempotency_key": "ci-minutes-2026-07-03",
+  "receipt_requirement": "required"
+}

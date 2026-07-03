@@ -1,0 +1,38 @@
+{
+  "action_id": "act://edit-readme",
+  "session_id": "sess://01J-readme-fix",
+  "tool_id": "tool://fs.write",
+  "action_kind": "write",
+  "target": {
+    "resource_kind": "file_path",
+    "resource_id": "/ws/beateros/README.md"
+  },
+  "resolved_target": {
+    "resource_kind": "file_path",
+    "resource_id": "/ws/beateros/README.md"
+  },
+  "inputs_digest": "c62efbef646bea50cddb208b5f573d15e2d3a9ad17bed77ecba85b301a7798bd",
+  "inputs_summary": "Replace 'teh' with 'the' on line 3 of README.md.",
+  "expected_outputs": [
+    "updated README.md"
+  ],
+  "expected_side_effects": [
+    "local_write"
+  ],
+  "required_grants": [
+    "grant://write-readme"
+  ],
+  "requested_budget": {
+    "max_tool_calls": 1
+  },
+  "risk_class": "low",
+  "data_classes": [
+    "code"
+  ],
+  "taint": [
+    "trusted_user_instruction"
+  ],
+  "idempotency_key": "edit-readme-line3",
+  "compensation_plan": "git checkout -- README.md",
+  "human_explanation": "Fix a typo on line 3 of README.md as requested."
+}

@@ -1,0 +1,33 @@
+{
+  "session_id": "sess://01J-readme-fix",
+  "created_at": "2026-07-03T21:00:00Z",
+  "created_by": "user://jaden",
+  "agent_id": "agent://claude/coder-1",
+  "workspace_id": "ws://beateros-checkout",
+  "goal": "Fix a typo in README.md and run the test suite.",
+  "constraints": [
+    "do not push",
+    "do not touch final.md"
+  ],
+  "policy_profile": "developer-default",
+  "initial_capability_ids": [
+    "grant://read-repo",
+    "grant://write-readme"
+  ],
+  "budget": {
+    "max_model_cents": 500,
+    "max_tool_calls": 50,
+    "max_wall_ms": 600000
+  },
+  "model_policy": {
+    "allowed_routes": [
+      "route://frontier",
+      "route://local-small"
+    ],
+    "local_only": false,
+    "max_data_class": "code"
+  },
+  "memory_scope": "ws://beateros-checkout",
+  "journal_root": "0000000000000000000000000000000000000000000000000000000000000000",
+  "status": "running"
+}

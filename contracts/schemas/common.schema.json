@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "common.schema.json",
+  "title": "beaterOS core contracts — shared definitions",
+  "description": "Language-neutral JSON Schema for the beaterOS agent-kernel wire format. Field names and enum values mirror the serde serialization of crates/beater-os-core/src/contracts.rs and receipt.rs (final.md §12). This file is the single source of truth for every $def; per-contract schema files $ref into it.",
+  "$defs": {
+    "HashValue": {
+      "type": "string",
+      "description": "Lowercase hex SHA-256 digest (64 chars). Genesis is 64 zeros.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 / ISO 8601 UTC timestamp, e.g. 2026-07-03T21:00:00Z"
+    },
+    "ActionKind": {
+      "type": "string",
+      "description": "final.md §20.1 capability action families.",
+      "enum": ["read", "write", "execute", "navigate", "submit", "communicate", "spend", "deploy", "remember", "delegate", "ask_human"]
+    },
+    "ResourceKind": {
+      "type": "string",
+      "enum": ["workspace", "file_path", "network_endpoint", "browser_origin", "tool", "memory", "model_route", "payment_rail", "cloud_resource", "human_recipient", "scenario", "other"]
+    },
+    "RiskClass": {
+      "type": "string",
+      "description": "Ordered low < medium < high < critical (final.md §5.3 semantic risk).",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "DataClass": {
+      "type": "string",
+      "description": "final.md §13.4 taint/provenance data classes (ordered public..secret for ceiling checks).",
+      "enum": ["public", "internal", "personal", "customer", "financial", "secret", "code", "binary", "untrusted_web", "untrusted_email", "untrusted_document", "tool_output"]
+    },
+    "SideEffectClass": {
+      "type": "string",
+      "description": "final.md §20.9 side-effect taxonomy.",
+      "enum": ["none", "local_write", "network_write", "browser_submit", "human_communication", "payment", "cloud_mutation", "deployment", "memory_write", "delegation"]
+    },
+    "TaintLabel": {
+      "type": "string",
+      "description": "final.md §13.4 information-source labels.",
+      "enum": ["trusted_user_instruction", "system_policy", "developer_instruction", "untrusted_web", "untrusted_email", "untrusted_document", "tool_output", "secret", "personal_data", "customer_data", "financial_data", "code", "binary", "payment_instruction"]
+    },
+    "SessionStatus": {
+      "type": "string",
+      "enum": ["created", "running", "waiting_for_approval", "paused", "completed", "failed", "canceled"]
+    },
+    "DecisionResult": {
+      "type": "string",
+      "description": "final.md §7.5 policy admission results.",
+      "enum": ["allowed", "denied", "needs_approval", "needs_simulation", "needs_narrowed_grant"]
+    },
+    "DelegationMode": {
+      "type": "string",
+      "description": "final.md §8.2 authority attenuation on delegation.",
+      "enum": ["none", "attenuated_only", "same_scope"]
+    },
+    "ApprovalMode": {
+      "type": "string",
+      "enum": ["none", "human", "multi_party"]
+    },
+    "Budget": {
+      "type": "object",
+      "description": "final.md §4.1 agent resource ceilings. All fields optional; null/absent means unbounded on that axis.",
+      "additionalProperties": false,
+      "properties": {
+        "max_model_cents": {"type": ["integer", "null"], "minimum": 0},
+        "max_tool_calls": {"type": ["integer", "null"], "minimum": 0},
+        "max_wall_ms": {"type": ["integer", "null"], "minimum": 0},
+        "max_payment_minor_units": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "ModelPolicy": {
+      "type": "object",
+      "description": "final.md §6.10 / §10.9 model routing constraints.",
+      "additionalProperties": false,
+      "properties": {
+        "allowed_routes": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "local_only": {"type": "boolean"},
+        "max_data_class": {"oneOf": [{"$ref": "common.schema.json#/$defs/DataClass"}, {"type": "null"}]}
+      }
+    },
+    "CapabilitySelector": {
+      "type": "object",
+      "description": "Names a resource by kind + id. resource_id '*' is a wildcard within the kind.",
+      "additionalProperties": false,
+      "required": ["resource_kind", "resource_id"],
+      "properties": {
+        "resource_kind": {"$ref": "common.schema.json#/$defs/ResourceKind"},
+        "resource_id": {"type": "string"}
+      }
+    },
+    "CapabilityScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selector", "actions"],
+      "properties": {
+        "selector": {"$ref": "common.schema.json#/$defs/CapabilitySelector"},
+        "actions": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/ActionKind"}, "uniqueItems": true}
+      }
+    },
+    "GrantConstraints": {
+      "type": "object",
+      "description": "final.md §13.3 grant narrowing dimensions.",
+      "additionalProperties": false,
+      "properties": {
+        "max_risk": {"oneOf": [{"$ref": "common.schema.json#/$defs/RiskClass"}, {"type": "null"}]},
+        "max_data_class": {"oneOf": [{"$ref": "common.schema.json#/$defs/DataClass"}, {"type": "null"}]},
+        "budget": {"$ref": "common.schema.json#/$defs/Budget"},
+        "network_allowlist": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "path_prefixes": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+    "ApprovalRequirement": {
+      "type": "object",
+      "description": "final.md §7.9 human review requirement attached to a grant.",
+      "additionalProperties": false,
+      "required": ["mode", "threshold_risk"],
+      "properties": {
+        "mode": {"$ref": "common.schema.json#/$defs/ApprovalMode"},
+        "threshold_risk": {"$ref": "common.schema.json#/$defs/RiskClass"},
+        "reviewer_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+    "AgentIdentity": {
+      "type": "object",
+      "description": "final.md §7.1 durable agent identity.",
+      "additionalProperties": false,
+      "required": ["agent_id", "human_owner", "agent_type", "version", "default_policy_profile"],
+      "properties": {
+        "agent_id": {"type": "string"},
+        "human_owner": {"type": "string"},
+        "organization_owner": {"type": ["string", "null"]},
+        "agent_type": {"type": "string"},
+        "version": {"type": "string"},
+        "signing_key_ref": {"type": ["string", "null"]},
+        "default_policy_profile": {"type": "string"},
+        "revoked": {"type": "boolean"}
+      }
+    },
+    "AgentSession": {
+      "type": "object",
+      "description": "final.md §7.2 / §12.1 one goal-directed run.",
+      "additionalProperties": false,
+      "required": ["session_id", "created_at", "created_by", "agent_id", "workspace_id", "goal", "policy_profile", "journal_root", "status"],
+      "properties": {
+        "session_id": {"type": "string"},
+        "created_at": {"$ref": "common.schema.json#/$defs/Timestamp"},
+        "created_by": {"type": "string"},
+        "agent_id": {"type": "string"},
+        "workspace_id": {"type": "string"},
+        "goal": {"type": "string"},
+        "constraints": {"type": "array", "items": {"type": "string"}},
+        "policy_profile": {"type": "string"},
+        "initial_capability_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "budget": {"$ref": "common.schema.json#/$defs/Budget"},
+        "model_policy": {"$ref": "common.schema.json#/$defs/ModelPolicy"},
+        "memory_scope": {"type": ["string", "null"]},
+        "journal_root": {"type": "string"},
+        "status": {"$ref": "common.schema.json#/$defs/SessionStatus"}
+      }
+    },
+    "CapabilityGrant": {
+      "type": "object",
+      "description": "final.md §7.3 / §12.2 the central authority object.",
+      "additionalProperties": false,
+      "required": ["grant_id", "issuer", "holder", "session_id", "scope", "expires_at", "delegation", "revocation_handle", "policy_version", "reason"],
+      "properties": {
+        "grant_id": {"type": "string"},
+        "issuer": {"type": "string"},
+        "holder": {"type": "string"},
+        "session_id": {"type": "string"},
+        "scope": {"$ref": "common.schema.json#/$defs/CapabilityScope"},
+        "denied_actions": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/ActionKind"}, "uniqueItems": true},
+        "constraints": {"$ref": "common.schema.json#/$defs/GrantConstraints"},
+        "expires_at": {"$ref": "common.schema.json#/$defs/Timestamp"},
+        "delegation": {"$ref": "common.schema.json#/$defs/DelegationMode"},
+        "approval": {"$ref": "common.schema.json#/$defs/ApprovalRequirement"},
+        "revocation_handle": {"type": "string"},
+        "policy_version": {"type": "string"},
+        "reason": {"type": "string"},
+        "revoked": {"type": "boolean"}
+      }
+    },
+    "ActionManifest": {
+      "type": "object",
+      "description": "final.md §7.4 / §12.3 predeclared side effect or observation.",
+      "additionalProperties": false,
+      "required": ["action_id", "session_id", "tool_id", "action_kind", "target", "inputs_digest", "inputs_summary", "risk_class", "human_explanation"],
+      "properties": {
+        "action_id": {"type": "string"},
+        "session_id": {"type": "string"},
+        "tool_id": {"type": "string"},
+        "action_kind": {"$ref": "common.schema.json#/$defs/ActionKind"},
+        "target": {"$ref": "common.schema.json#/$defs/CapabilitySelector"},
+        "resolved_target": {"oneOf": [{"$ref": "common.schema.json#/$defs/CapabilitySelector"}, {"type": "null"}]},
+        "inputs_digest": {"type": "string"},
+        "inputs_summary": {"type": "string"},
+        "expected_outputs": {"type": "array", "items": {"type": "string"}},
+        "expected_side_effects": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/SideEffectClass"}, "uniqueItems": true},
+        "required_grants": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "requested_budget": {"$ref": "common.schema.json#/$defs/Budget"},
+        "risk_class": {"$ref": "common.schema.json#/$defs/RiskClass"},
+        "data_classes": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/DataClass"}, "uniqueItems": true},
+        "taint": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/TaintLabel"}, "uniqueItems": true},
+        "idempotency_key": {"type": ["string", "null"]},
+        "compensation_plan": {"type": ["string", "null"]},
+        "human_explanation": {"type": "string"}
+      }
+    },
+    "PolicyDecision": {
+      "type": "object",
+      "description": "final.md §7.5 / §12.4 deterministic admission result. manifest_hash binds the decision to the exact admitted manifest.",
+      "additionalProperties": false,
+      "required": ["decision_id", "action_id", "manifest_hash", "policy_version", "result", "explanation", "created_at"],
+      "properties": {
+        "decision_id": {"type": "string"},
+        "action_id": {"type": "string"},
+        "manifest_hash": {"$ref": "common.schema.json#/$defs/HashValue"},
+        "policy_version": {"type": "string"},
+        "result": {"$ref": "common.schema.json#/$defs/DecisionResult"},
+        "matched_rules": {"type": "array", "items": {"type": "string"}},
+        "explanation": {"type": "string"},
+        "required_review": {"type": ["string", "null"]},
+        "required_simulation": {"type": ["string", "null"]},
+        "created_at": {"$ref": "common.schema.json#/$defs/Timestamp"}
+      }
+    },
+    "CapabilityReceipt": {
+      "type": "object",
+      "description": "final.md §7.6 / §12.5 hash-chained side-effect receipt (receipt.rs). seq + prev_receipt_hash + receipt_hash form the tamper-evident chain.",
+      "additionalProperties": false,
+      "required": ["receipt_id", "seq", "action_id", "tool_id", "target", "started_at", "finished_at", "status", "input_digest", "output_digest", "side_effect_summary", "prev_receipt_hash", "receipt_hash"],
+      "properties": {
+        "receipt_id": {"type": "string"},
+        "seq": {"type": "integer", "minimum": 0},
+        "action_id": {"type": "string"},
+        "tool_id": {"type": "string"},
+        "target": {"$ref": "common.schema.json#/$defs/CapabilitySelector"},
+        "started_at": {"$ref": "common.schema.json#/$defs/Timestamp"},
+        "finished_at": {"$ref": "common.schema.json#/$defs/Timestamp"},
+        "status": {"type": "string"},
+        "input_digest": {"type": "string"},
+        "output_digest": {"type": "string"},
+        "side_effect_summary": {"type": "string"},
+        "side_effects": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/SideEffectClass"}},
+        "external_ids": {"type": "array", "items": {"type": "string"}},
+        "artifact_refs": {"type": "array", "items": {"type": "string"}},
+        "prev_receipt_hash": {"$ref": "common.schema.json#/$defs/HashValue"},
+        "receipt_hash": {"$ref": "common.schema.json#/$defs/HashValue"}
+      }
+    },
+    "MemoryRecord": {
+      "type": "object",
+      "description": "final.md §7.7 / §12.6 memory with provenance. confidence_basis_points is 0..10000.",
+      "additionalProperties": false,
+      "required": ["memory_id", "source_event_id", "source_digest", "writer", "created_at", "kind", "content_ref", "summary", "confidence_basis_points", "sensitivity", "access_policy"],
+      "properties": {
+        "memory_id": {"type": "string"},
+        "source_event_id": {"type": "string"},
+        "source_digest": {"type": "string"},
+        "writer": {"type": "string"},
+        "created_at": {"$ref": "common.schema.json#/$defs/Timestamp"},
+        "kind": {"type": "string"},
+        "content_ref": {"type": "string"},
+        "summary": {"type": "string"},
+        "confidence_basis_points": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "sensitivity": {"$ref": "common.schema.json#/$defs/DataClass"},
+        "expires_at": {"oneOf": [{"$ref": "common.schema.json#/$defs/Timestamp"}, {"type": "null"}]},
+        "access_policy": {"type": "string"}
+      }
+    },
+    "PaymentMandate": {
+      "type": "object",
+      "description": "final.md §8.7 / §12.7 bounded economic authority.",
+      "additionalProperties": false,
+      "required": ["mandate_id", "issuer", "holder", "session_id", "rail", "asset", "max_minor_units", "counterparty_policy", "purpose", "expires_at", "approval_threshold_minor_units", "idempotency_key", "receipt_requirement"],
+      "properties": {
+        "mandate_id": {"type": "string"},
+        "issuer": {"type": "string"},
+        "holder": {"type": "string"},
+        "session_id": {"type": "string"},
+        "rail": {"type": "string"},
+        "asset": {"type": "string"},
+        "max_minor_units": {"type": "integer", "minimum": 0},
+        "counterparty_policy": {"type": "string"},
+        "purpose": {"type": "string"},
+        "expires_at": {"$ref": "common.schema.json#/$defs/Timestamp"},
+        "approval_threshold_minor_units": {"type": "integer", "minimum": 0},
+        "idempotency_key": {"type": "string"},
+        "receipt_requirement": {"type": "string"}
+      }
+    },
+    "ScenarioManifest": {
+      "type": "object",
+      "description": "final.md §7.10 / §12.8 / §14 the eval unit: task + environment + oracle.",
+      "additionalProperties": false,
+      "required": ["scenario_id", "goal", "environment", "oracle"],
+      "properties": {
+        "scenario_id": {"type": "string"},
+        "goal": {"type": "string"},
+        "environment": {"type": "string"},
+        "fixtures": {"type": "object", "additionalProperties": {"type": "string"}},
+        "allowed_tools": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "forbidden_actions": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/ActionKind"}, "uniqueItems": true},
+        "oracle": {"type": "string"},
+        "success_criteria": {"type": "array", "items": {"type": "string"}},
+        "risk_traps": {"type": "array", "items": {"type": "string"}},
+        "budget": {"$ref": "common.schema.json#/$defs/Budget"},
+        "expected_trace_properties": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "ToolManifest": {
+      "type": "object",
+      "description": "final.md §7.8 / §10.14 registry entry for a tool.",
+      "additionalProperties": false,
+      "required": ["tool_id", "publisher", "version", "transport", "risk_class"],
+      "properties": {
+        "tool_id": {"type": "string"},
+        "publisher": {"type": "string"},
+        "version": {"type": "string"},
+        "transport": {"type": "string"},
+        "required_capabilities": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/CapabilityScope"}},
+        "side_effects": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/SideEffectClass"}, "uniqueItems": true},
+        "risk_class": {"$ref": "common.schema.json#/$defs/RiskClass"},
+        "sandbox_required": {"type": "boolean"}
+      }
+    },
+    "HumanReviewRequest": {
+      "type": "object",
+      "description": "final.md §7.9 / §10.10 human review queue entry.",
+      "additionalProperties": false,
+      "required": ["review_id", "action_id", "risk_class", "preview_ref", "required_decision", "reviewer_id", "created_at"],
+      "properties": {
+        "review_id": {"type": "string"},
+        "action_id": {"type": "string"},
+        "risk_class": {"$ref": "common.schema.json#/$defs/RiskClass"},
+        "preview_ref": {"type": "string"},
+        "required_decision": {"type": "string"},
+        "reviewer_id": {"type": "string"},
+        "created_at": {"$ref": "common.schema.json#/$defs/Timestamp"}
+      }
+    },
+    "ApprovalEvidence": {
+      "type": "object",
+      "description": "final.md §13.14 approval bound to action, manifest hash, grant, reviewer, and policy version.",
+      "additionalProperties": false,
+      "required": ["review_id", "action_id", "manifest_hash", "grant_id", "reviewer_id", "approved_at", "policy_version"],
+      "properties": {
+        "review_id": {"type": "string"},
+        "action_id": {"type": "string"},
+        "manifest_hash": {"$ref": "common.schema.json#/$defs/HashValue"},
+        "grant_id": {"type": "string"},
+        "reviewer_id": {"type": "string"},
+        "approved_at": {"$ref": "common.schema.json#/$defs/Timestamp"},
+        "policy_version": {"type": "string"}
+      }
+    },
+    "SimulationEvidence": {
+      "type": "object",
+      "description": "final.md §14 simulation pass bound to action, manifest hash, scenario, and policy version.",
+      "additionalProperties": false,
+      "required": ["simulation_id", "action_id", "manifest_hash", "scenario_id", "passed_at", "policy_version"],
+      "properties": {
+        "simulation_id": {"type": "string"},
+        "action_id": {"type": "string"},
+        "manifest_hash": {"$ref": "common.schema.json#/$defs/HashValue"},
+        "scenario_id": {"type": "string"},
+        "passed_at": {"$ref": "common.schema.json#/$defs/Timestamp"},
+        "policy_version": {"type": "string"}
+      }
+    }
+  }
+}

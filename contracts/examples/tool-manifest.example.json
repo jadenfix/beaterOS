@@ -1,0 +1,22 @@
+{
+  "tool_id": "tool://fs.write",
+  "publisher": "beateros-core",
+  "version": "0.1.0",
+  "transport": "local-function",
+  "required_capabilities": [
+    {
+      "selector": {
+        "resource_kind": "file_path",
+        "resource_id": "*"
+      },
+      "actions": [
+        "write"
+      ]
+    }
+  ],
+  "side_effects": [
+    "local_write"
+  ],
+  "risk_class": "low",
+  "sandbox_required": true
+}

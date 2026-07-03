@@ -1,0 +1,9 @@
+{
+  "review_id": "review://push-approval",
+  "action_id": "act://git-push",
+  "risk_class": "high",
+  "preview_ref": "cas://sha256/98c00664f994b8cf476ad39bd91ed9c682c35c3bbc11f78b9431ae8700b82688",
+  "required_decision": "approve|deny push to origin/main",
+  "reviewer_id": "user://jaden",
+  "created_at": "2026-07-03T21:00:00Z"
+}

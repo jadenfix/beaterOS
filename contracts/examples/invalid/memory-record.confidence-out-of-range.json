@@ -1,0 +1,13 @@
+{
+  "memory_id": "m",
+  "source_event_id": "e",
+  "source_digest": "d",
+  "writer": "a",
+  "created_at": "2026-07-03T21:00:00Z",
+  "kind": "semantic",
+  "content_ref": "c",
+  "summary": "s",
+  "confidence_basis_points": 20000,
+  "sensitivity": "internal",
+  "access_policy": "p"
+}

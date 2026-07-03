@@ -1,0 +1,14 @@
+{
+  "memory_id": "mem://readme-line3-typo",
+  "source_event_id": "evt://act-edit-readme",
+  "source_digest": "8330971e48cc5d32fb13ea049318b1e840bf2da1b9760bc2ad59803ddd716671",
+  "writer": "agent://claude/coder-1",
+  "created_at": "2026-07-03T21:00:05Z",
+  "kind": "episodic",
+  "content_ref": "cas://sha256/47fa75057ecb757a960cb62b091d06f9a8518bf4b317719eab17af2b1395d6c1",
+  "summary": "README.md line 3 had a typo 'teh' that was corrected to 'the'.",
+  "confidence_basis_points": 9800,
+  "sensitivity": "code",
+  "expires_at": null,
+  "access_policy": "workspace-only"
+}

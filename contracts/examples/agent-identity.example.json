@@ -1,0 +1,10 @@
+{
+  "agent_id": "agent://claude/coder-1",
+  "human_owner": "user://jaden",
+  "organization_owner": "org://roe-ai",
+  "agent_type": "coding-assistant",
+  "version": "1.0.0",
+  "signing_key_ref": null,
+  "default_policy_profile": "developer-default",
+  "revoked": false
+}

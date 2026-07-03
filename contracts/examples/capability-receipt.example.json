@@ -1,0 +1,25 @@
+{
+  "receipt_id": "rcpt://edit-readme",
+  "seq": 0,
+  "action_id": "act://edit-readme",
+  "tool_id": "tool://fs.write",
+  "target": {
+    "resource_kind": "file_path",
+    "resource_id": "/ws/beateros/README.md"
+  },
+  "started_at": "2026-07-03T21:00:00Z",
+  "finished_at": "2026-07-03T21:00:05Z",
+  "status": "ok",
+  "input_digest": "c62efbef646bea50cddb208b5f573d15e2d3a9ad17bed77ecba85b301a7798bd",
+  "output_digest": "d953f14e7f4e33cbe6edf03aabe4f53efb091c402f79f21fce3ae294b3e058bb",
+  "side_effect_summary": "Wrote 1 file (README.md), 1 line changed.",
+  "side_effects": [
+    "local_write"
+  ],
+  "external_ids": [],
+  "artifact_refs": [
+    "cas://sha256/d953f14e7f4e33cbe6edf03aabe4f53efb091c402f79f21fce3ae294b3e058bb"
+  ],
+  "prev_receipt_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "receipt_hash": "45bf9951325725f0b99dad30c612f9a70f53c1aa6b57d0f7ae3d930572edb242"
+}

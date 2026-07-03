@@ -1,0 +1,9 @@
+{
+  "decision_id": "d",
+  "action_id": "a",
+  "manifest_hash": "8330971e48cc5d32fb13ea049318b1e840bf2da1b9760bc2ad59803ddd716671",
+  "policy_version": "p",
+  "result": "allowed",
+  "explanation": "e",
+  "created_at": "yesterday"
+}

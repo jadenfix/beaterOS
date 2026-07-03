@@ -1,0 +1,8 @@
+{
+  "simulation_id": "sim://readme-typo-fix-001",
+  "action_id": "act://edit-readme",
+  "manifest_hash": "8330971e48cc5d32fb13ea049318b1e840bf2da1b9760bc2ad59803ddd716671",
+  "scenario_id": "scenario://coding.readme-typo-fix",
+  "passed_at": "2026-07-03T21:00:00Z",
+  "policy_version": "policy-2026.07.0"
+}

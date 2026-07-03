@@ -1,0 +1,15 @@
+{
+  "decision_id": "dec://edit-readme",
+  "action_id": "act://edit-readme",
+  "manifest_hash": "8330971e48cc5d32fb13ea049318b1e840bf2da1b9760bc2ad59803ddd716671",
+  "policy_version": "policy-2026.07.0",
+  "result": "allowed",
+  "matched_rules": [
+    "grant://write-readme allows write on /ws/beateros/README.md",
+    "risk_class low <= max_risk low"
+  ],
+  "explanation": "Write is within the granted path prefix and risk ceiling; local_write only.",
+  "required_review": null,
+  "required_simulation": null,
+  "created_at": "2026-07-03T21:00:00Z"
+}

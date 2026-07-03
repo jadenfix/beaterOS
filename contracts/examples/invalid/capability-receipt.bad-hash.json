@@ -1,0 +1,18 @@
+{
+  "receipt_id": "r",
+  "seq": 0,
+  "action_id": "a",
+  "tool_id": "t",
+  "target": {
+    "resource_kind": "file_path",
+    "resource_id": "/a"
+  },
+  "started_at": "2026-07-03T21:00:00Z",
+  "finished_at": "2026-07-03T21:00:05Z",
+  "status": "ok",
+  "input_digest": "d",
+  "output_digest": "d",
+  "side_effect_summary": "s",
+  "prev_receipt_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "receipt_hash": "NOT-A-HASH"
+}

@@ -1,0 +1,19 @@
+{
+  "grant_id": "grant://x",
+  "issuer": "beater-osd",
+  "session_id": "sess://x",
+  "scope": {
+    "selector": {
+      "resource_kind": "file_path",
+      "resource_id": "/a"
+    },
+    "actions": [
+      "read"
+    ]
+  },
+  "expires_at": "2026-07-03T22:00:00Z",
+  "delegation": "none",
+  "revocation_handle": "rev://x",
+  "policy_version": "p",
+  "reason": "r"
+}

@@ -1,0 +1,14 @@
+{
+  "action_id": "a",
+  "session_id": "s",
+  "tool_id": "t",
+  "action_kind": "frobnicate",
+  "target": {
+    "resource_kind": "file_path",
+    "resource_id": "/a"
+  },
+  "inputs_digest": "d",
+  "inputs_summary": "s",
+  "risk_class": "low",
+  "human_explanation": "e"
+}
