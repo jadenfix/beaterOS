@@ -1,0 +1,5 @@
+# Scoped ignore for the Python governance tooling (kept out of the repo-root
+# .gitignore to avoid colliding with other agents' branches).
+__pycache__/
+*.pyc
+.pytest_cache/
