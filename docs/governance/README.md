@@ -1,35 +1,43 @@
-# beaterOS Governance
+# beaterOS Review Gate
 
-How multiple agents build beaterOS on one repository and one shared GitHub
-account without stepping on each other, and without any agent reviewing or
-merging its own work.
+This directory is the **review gate** for beaterOS PRs: a concrete, reusable
+checklist a *non-author* reviewer runs against every PR, plus a linter that
+enforces the "no self-merge / independent review" rule at the agent-identity
+layer.
+
+It is deliberately **scoped to review tooling** so it does not duplicate the
+broader multi-agent contribution contract. For the contribution process itself
+(claiming work, lanes, `CONTRIBUTING`, `CODEOWNERS`, the CI enforcement
+workflow), see the governance PR that owns that backbone
+(`AGENTS.md` / `docs/coordination.md`, PR #19). This gate is designed to be
+*called by* that workflow.
 
 ## Contents
 
-- **[review-protocol.md](review-protocol.md)** — the lifecycle: claim (draft PR)
-  → deconflict → build → review → merge, and the author≠reviewer≠merger rule at
-  the agent-identity layer.
-- **[review-checklist.md](review-checklist.md)** — the concrete gate a non-author
-  reviewer runs, derived from `final.md` §26/§12/§13.
-- **[coordination-ledger.md](coordination-ledger.md)** — the living record of who
-  claimed/authored/reviewed/merged what. Every agent updates it.
-- **[agent-roles.md](agent-roles.md)** — lanes that keep parallel write-scopes
-  disjoint.
-- **[../implementation-backlog.md](../implementation-backlog.md)** — the `codex`
-  agent's 17-slice map of `final.md` into PRs (the *what*; this dir is the *how*).
+- **[review-checklist.md](review-checklist.md)** — turns `final.md` §26
+  (never-compromise), §12 (contracts), and §13 (security) into a per-PR checklist
+  with a reviewer sign-off block. This is what a non-author reviewer fills in.
+- **[coordination-ledger.md](coordination-ledger.md)** — the agent-layer record
+  of who authored / reviewed / merged each PR (approvals can't live in GitHub's
+  "Approve" because all agents share one account). Proposed to merge into the
+  single canonical ledger owned by the governance-backbone PR.
+- **[../../scripts/check-governance.py](../../scripts/check-governance.py)** — a
+  dependency-free linter that fails if a `merged` PR's merger equals its author,
+  or an in-review PR's reviewer equals its author.
 
-## The one rule to remember
+## Why review lives at the agent layer
 
-A PR is **authored by one agent and reviewed + merged by a different agent.**
-Because all agents share the `jadenfix` account, GitHub can't enforce this — so
-it is enforced by convention, by the coordination ledger, and by
-`scripts/check-governance.py`.
+Every agent (codex, claude, sub-agents) authenticates as the same GitHub account,
+so GitHub cannot tell them apart: it blocks a formal **Approve** on your own PR
+and cannot enforce "a different agent merged this." Approval is therefore a
+COMMENT review that names the reviewer agent + an explicit verdict, recorded in
+the ledger; merge-by-a-different-agent is the enforcement lever; and the linter
+below makes violations visible.
 
-## Run the governance check
+## Run it
 
 ```sh
-python3 scripts/check-governance.py
+python3 scripts/check-governance.py [path/to/ledger.md]
 ```
 
-Exits non-zero if any `merged` PR was merged by its author, or any in-review PR
-lacks a distinct reviewer.
+Exit 0 = clean, exit 1 = a self-merge or self-review slipped in.
