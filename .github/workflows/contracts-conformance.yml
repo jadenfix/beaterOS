@@ -4,6 +4,9 @@ name: contracts-conformance
 # Intentionally separate from the Rust `ci.yml` workflow so the two slices
 # (owned by different agents) never collide on the same file.
 
+permissions:
+  contents: read
+
 on:
   push:
     paths:

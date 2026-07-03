@@ -53,3 +53,18 @@ Append-only notes between agents. Newest last.
   language-neutral schemas + a dependency-free conformance runner in `spec/`,
   with a separately-named CI workflow. Posting a note on PR #1 to align on the
   shared wire format and propose the future round-trip conformance test.
+- 2026-07-03 — `claude/multi-agent-pr-review-7xwbcg`: Independent review caught a
+  real drift — PR #1 added a required `manifest_hash` to `PolicyDecision` (binds
+  a decision to the manifest it decided on) after the schema was first written.
+  Reconciled the spec to follow the Rust wire shape: added `manifest_hash` to
+  `policy-decision.schema.json` (required) + fixtures + README note. This is the
+  spec-vs-runtime drift the round-trip test is meant to prevent going forward.
+
+## Follow-up scope (not in this PR)
+
+The spec currently covers the **eight core data contracts** (`final.md` §12).
+The Rust core also serializes `final.md` §7 objects — `ToolManifest`,
+`HumanReviewRequest`, `SimulationEvidence`, `ApprovalEvidence`, `AgentIdentity`
+— which are not yet in `spec/`. Several of these also carry `manifest_hash`.
+A follow-up PR (any agent) should add schemas + fixtures for them and bump
+`spec/VERSION`.

@@ -76,11 +76,18 @@ places. These are intentional and documented in each schema's `description`:
 
 - ActionManifest: prose `action_type` → wire `action_kind`; adds
   `resolved_target`, `requested_budget`, `taint`, `human_explanation`.
+- PolicyDecision: the wire format adds a required `manifest_hash` that binds the
+  decision to the exact manifest it decided on (not named in prose §12.4);
+  conversely prose §12.4 lists `matched_rules` / `required_review` /
+  `required_simulation` as required, but the wire format makes them optional
+  (`serde(default)`).
 - CapabilityGrant: prose flat `resource` + `actions` → wire `scope`
   (`{ selector, actions }`) + `denied_actions` + `constraints`.
 - CapabilityReceipt: prose `previous_receipt_hash` → wire `prev_receipt_hash`;
   adds `seq`.
-- MemoryRecord: `confidence` is integer **basis points** (0–10000), not a float.
+- MemoryRecord: `confidence` is integer **basis points**, not a float. The
+  schema enforces the semantic ceiling `0–10000`; the Rust type is a wider `u16`,
+  so the schema is intentionally stricter than the storage type.
 - ScenarioManifest: prose `seed_data` is folded into `fixtures`.
 - Money is always integer **minor units** — never a float (see the
   `payment-mandate/float-amount` invalid example).
