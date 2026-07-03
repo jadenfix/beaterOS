@@ -1,53 +1,73 @@
-# AGENTS.md — operating manual for the beaterOS fleet
+# beaterOS Agent Context
 
-This repository is built by multiple agents (and people) working in parallel.
-Read this before making changes so the fleet stays coordinated and the repo stays
-legible to everyone, not just whoever wrote a given file.
+Use this file as startup context for Codex, Claude Code, Cursor, Copilot, and
+other coding agents working in this repository.
 
-## The one rule that is never bent
+## What beaterOS Is
 
-**No agent merges its own PR.** Author, approver, and merger are distinct
-principals. This is the non-ambient-authority principle from `final.md` applied
-to our own process.
+beaterOS is an agent-first operating-system research and implementation repo.
+The source-of-truth product plan is [final.md](final.md). Implementation must
+turn that plan into reviewed, measurable, macOS-compatible slices without
+shortening or weakening the plan.
 
-## Where things live
+The first implementation layer is a Rust workspace with kernel-facing contracts:
+agent sessions, capability grants, action manifests, policy decisions, receipts,
+and append-only journals. Future runtime work must preserve those contracts as
+authority and audit boundaries, not merely as serialization types.
 
-- [`final.md`](final.md) — the plan and source of truth. Grows, never shrinks.
-- [`contracts/`](contracts/) — language-neutral JSON Schemas for the core data
-  contracts (final.md §12). Every implementation conforms to these.
-- [`docs/multi-agent-coordination.md`](docs/multi-agent-coordination.md) — how
-  agents claim work, avoid collisions, and run the review loop.
-- [`docs/review-checklist.md`](docs/review-checklist.md) — how to review a PR you
-  did not author.
-- `docs/implementation-backlog.md` — the feature slices and their branches
-  (lands with the Rust workspace PR).
-- [`tools/`](tools/) — repo guards and validators (`final_integrity.py`,
-  `contracts_validate.py`).
-- `crates/` — the reference Rust implementation of the contracts.
+## Repo Shape
 
-## Before you start a slice
+- `Cargo.toml` is the Rust workspace.
+- `crates/beater-os-core` contains core contracts, policy admission, hashing,
+  journal verification, and receipt-chain logic.
+- `docs/implementation-backlog.md` maps `final.md` into PR-sized slices and
+  review rules.
+- `docs/sota-systems-engineering.md` is the performance, language, security, and
+  macOS engineering doctrine for this project.
+- `.codex/skills/beateros-systems-engineering/SKILL.md` packages that doctrine
+  as a reusable Codex skill.
+- `CLAUDE.md` and `.cursor/rules/beateros.mdc` keep equivalent guidance close to
+  Claude Code and Cursor.
 
-1. Pick/propose a slice; branch as `<agent>/<slice>`.
-2. Check open PRs/branches for path collisions; keep write scopes disjoint.
-3. Prefer new files/dirs over editing another agent's in-flight files.
+## Non-Negotiables
 
-## Before you open a PR
+- Keep PRs scoped and reviewed. Every feature lands through a PR, and no author
+  merges their own PR.
+- Do not weaken `final.md`. Add clarifying docs or implementation artifacts
+  around it unless the user explicitly asks to edit it.
+- Treat performance as an architectural property. Identify the hot path, syscall
+  budget, allocation budget, copy budget, queue bounds, and p95/p99 target before
+  optimizing syntax.
+- Treat security as a systems invariant. Capabilities, receipts, policy
+  decisions, memory, payments, tools, and model calls must fail closed and be
+  replayable from evidence.
+- Make macOS work. The repo must build and test on macOS, including Apple
+  Silicon. Do not introduce Linux-only assumptions without an abstraction and a
+  macOS path.
+- Prefer Rust for most implementation. Use C only for stable ABI, boot/platform,
+  driver, hypervisor, or measured hot-path interop needs. Use assembly only at
+  the hardware boundary. Isolate and review all unsafe code.
 
-- Run the checks for your slice type:
-  - Rust: `cargo fmt --check && cargo test --workspace && cargo clippy --workspace --all-targets`
-  - Contracts/tooling: `python3 -m unittest discover -s tests && python3 tools/contracts_validate.py && python3 tools/final_integrity.py`
-- Fill in the PR template, including the **review routing** section.
-- Include negative tests, not only happy paths.
+## SOTA Systems Engineering Checklist
 
-## Review and merge
+Before designing or reviewing a substantial change, read
+[docs/sota-systems-engineering.md](docs/sota-systems-engineering.md). At minimum,
+be able to answer:
 
-- Request review from a non-author using `docs/review-checklist.md`.
-- Address findings on the branch; re-review is by a non-author.
-- A non-author merges once approved and green, and records the merge on the PR.
+- What is the critical path, and what is explicitly off the critical path?
+- What are the data ownership, lifetime, and copy rules?
+- Which queue, cache, journal, network, filesystem, or model call can back up?
+- What is bounded by construction: memory, CPU, IO, tool calls, model spend,
+  payment spend, retries, and wall-clock time?
+- Which authority boundary does this touch, and what evidence proves it?
+- What benchmark, trace, property test, or scenario would catch a regression?
+- Why is the chosen language boundary Rust, C, or assembly?
 
-## Communication
+## Common Commands
 
-- Talk through PR comments and `contracts/README.md`, not side channels, so the
-  whole fleet can see decisions.
-- Escalate ambiguous or architectural questions to the human owner.
-- Never weaken a `final.md` invariant to make a change fit; stop and ask.
+```sh
+cargo fmt --all -- --check
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+git diff --check
+```
