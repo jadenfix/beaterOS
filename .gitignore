@@ -5,3 +5,6 @@
 # Python (tooling under scripts/ and spec/conformance/)
 __pycache__/
 *.py[cod]
+
+# Local beater-coord coordination store (runtime state, not source).
+.beater/

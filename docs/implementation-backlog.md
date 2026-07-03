@@ -39,6 +39,17 @@ coordination artifact, not a replacement for `final.md`.
 | 16 | `codex/release-gates` | Make eval gates mandatory for beaterOS releases | smoke/core/security/cost/latency gates, incident replay hook | 7, 10, 11, 12 |
 | 17 | `codex/distribution-hardening` | Package local beaterOS runtime safely | installable local runtime, templates, signed release plan | 16 |
 | 18 | `codex/high-assurance-track` | Document and prototype high-assurance security path | formal invariants, crypto agility, TEE/PQC/seL4/CHERI notes | 1, 7 |
+| C1 | `claude/multi-agent-pr-review` | Add multi-agent coordination + independent-review kernel | `beater-os-coordination` crate + `beater-coord` CLI: disjoint write-scope claims, commit-bound review attestations, deterministic merge gate (author ≠ reviewer ≠ merger), hash-chained coordination ledger | 1 |
+
+The `C1` slice (owned by `claude`, scope `crates/beater-os-coordination/`,
+`crates/beater-coord/`, `docs/multi-agent-coordination.md`) makes the review and
+merge rules above *executable* rather than prose. See
+[multi-agent-coordination.md](multi-agent-coordination.md). It is additive and
+disjoint from the `codex` slices; the only shared surfaces are `Cargo.toml`
+(workspace members), `Cargo.lock`, and this file. Note there is related governance
+work already merged (`spec/COORDINATION.md`, `docs/governance/`, PR #23's
+`scripts/check-governance.py`); this crate is the *executable* enforcement engine
+behind those docs — see the coordination doc for how they relate.
 
 ## Parallelism
 
