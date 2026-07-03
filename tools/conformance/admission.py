@@ -278,6 +278,13 @@ def _untrusted_dangerous_approved(grant, manifest, ctx, now) -> bool:
     it still enforces the SAME reviewer-authorization and multi-party rules for
     `human`/`multi_party`. It must never accept an approval from an unauthorized
     reviewer.
+
+    Parity note: the Rust core's HEAD escalates `mode == none` unconditionally
+    (no configured reviewer can sign off). This port is fail-safe but marginally
+    more permissive: `mode == none` is admitted only if an explicit action-bound
+    approval artifact exists. Both are strictly safer than the pinned commit
+    3e5625a (which auto-passed `mode == none`). Kept intentionally; see PR #22
+    review thread.
     """
     approval = grant.get("approval", {}) or {}
     mode = approval.get("mode", "none")
