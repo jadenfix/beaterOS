@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "policy-decision.schema.json",
+  "title": "PolicyDecision",
+  "description": "final.md 12.4 / contracts.rs PolicyDecision. The deterministic admission result for an action manifest. Invariants: denied actions cannot be executed; review-required actions cannot execute before approval; policy decisions are journaled before execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decision_id",
+    "action_id",
+    "policy_version",
+    "result",
+    "explanation",
+    "created_at"
+  ],
+  "properties": {
+    "decision_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "action_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "policy_version": { "$ref": "common.schema.json#/$defs/Identifier" },
+    "result": { "$ref": "common.schema.json#/$defs/DecisionResult" },
+    "matched_rules": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "explanation": { "type": "string", "minLength": 1 },
+    "required_review": { "type": ["string", "null"] },
+    "required_simulation": { "type": ["string", "null"] },
+    "created_at": { "$ref": "common.schema.json#/$defs/Timestamp" }
+  }
+}
