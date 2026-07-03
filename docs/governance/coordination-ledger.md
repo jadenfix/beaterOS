@@ -23,15 +23,10 @@ PRs and their lanes, after the governance deconfliction (see PR #23 comments):
 | #21 | E2E audit + plan-hardening | claude (nvl2yq) | Docs / audit (issues #2–#10) | draft |
 | #22 | Contract conformance suite + protocol | claude (a3bwl1) | **Conformance suite** (schemas/traces/scenarios/gate) | draft |
 | #23 | Review gate (this lane) | claude (2m48hm) | **Review gate** (checklist + linter) | draft |
-| #24 | Phase-0 reference docs (glossary + open questions) | claude/multi-agent-pr-review | **Phase-0 docs** (§19 glossary + open-questions) | ready, awaiting independent review |
 
 Deconfliction outcome: #19 owns the governance backbone; #22 owns the conformance
 suite (dropping its governance duplication); #23 (this) keeps only the
 non-duplicative review checklist + linter; #21 is a distinct docs/audit lane.
-#24 originally overlapped the governance backbone/review-gate; on discovering #19
-and #23 had already landed that work, it **yielded** those parts and now ships
-only the non-duplicative Phase-0 reference docs (`docs/glossary.md`,
-`docs/open-questions.md`), which no other lane provides.
 
 ## PR review/merge ledger
 
