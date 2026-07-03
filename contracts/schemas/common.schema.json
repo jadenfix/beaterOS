@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://beateros.dev/contracts/common.schema.json",
+  "title": "beaterOS Common Contract Definitions",
+  "description": "Shared enums and value objects for the beaterOS core data contracts (final.md section 12). This file is the single source of truth for controlled vocabularies. Enum values are snake_case so that any implementation language can serialize to them (the reference Rust crate uses serde rename_all = \"snake_case\").",
+  "$defs": {
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 / ISO 8601 UTC timestamp, e.g. 2026-07-03T12:00:00Z."
+    },
+    "Id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Opaque, stable identifier. Never derived from model output."
+    },
+    "Digest": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+:[0-9a-f]+$",
+      "description": "Content digest of the form <algo>:<hex>, e.g. sha256:ab12..."
+    },
+    "ActionKind": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write",
+        "execute",
+        "navigate",
+        "submit",
+        "communicate",
+        "spend",
+        "deploy",
+        "remember",
+        "delegate",
+        "ask_human"
+      ],
+      "description": "The verb of a proposed action. final.md section 12.3 calls this action_type."
+    },
+    "ResourceKind": {
+      "type": "string",
+      "enum": [
+        "workspace",
+        "file_path",
+        "network_endpoint",
+        "browser_origin",
+        "tool",
+        "memory",
+        "model_route",
+        "payment_rail",
+        "cloud_resource",
+        "human_recipient",
+        "scenario",
+        "other"
+      ]
+    },
+    "RiskClass": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"],
+      "description": "Ordered low < medium < high < critical. Policy may raise, never lower (final.md 12.3)."
+    },
+    "DataClass": {
+      "type": "string",
+      "enum": [
+        "public",
+        "internal",
+        "personal",
+        "customer",
+        "financial",
+        "secret",
+        "code",
+        "binary",
+        "untrusted_web",
+        "untrusted_email",
+        "untrusted_document",
+        "tool_output"
+      ]
+    },
+    "SideEffectClass": {
+      "type": "string",
+      "enum": [
+        "none",
+        "local_write",
+        "network_write",
+        "browser_submit",
+        "human_communication",
+        "payment",
+        "cloud_mutation",
+        "deployment",
+        "memory_write",
+        "delegation"
+      ]
+    },
+    "SessionStatus": {
+      "type": "string",
+      "enum": [
+        "created",
+        "running",
+        "waiting_for_approval",
+        "paused",
+        "completed",
+        "failed",
+        "canceled"
+      ]
+    },
+    "DecisionResult": {
+      "type": "string",
+      "enum": [
+        "allowed",
+        "denied",
+        "needs_approval",
+        "needs_simulation",
+        "needs_narrowed_grant"
+      ]
+    },
+    "DelegationMode": {
+      "type": "string",
+      "enum": ["none", "attenuated_only", "same_scope"]
+    },
+    "ApprovalMode": {
+      "type": "string",
+      "enum": ["none", "human", "multi_party"]
+    },
+    "ReceiptStatus": {
+      "type": "string",
+      "enum": ["succeeded", "failed", "denied", "compensated", "partial"]
+    },
+    "MemoryKind": {
+      "type": "string",
+      "enum": ["working", "episodic", "semantic", "policy", "user_preference"]
+    },
+    "Budget": {
+      "type": "object",
+      "description": "Optional economic and resource ceilings. Absent field means unbounded for that dimension (fail-open only for budgeting, never for authority).",
+      "properties": {
+        "max_model_cents": { "type": "integer", "minimum": 0 },
+        "max_tool_calls": { "type": "integer", "minimum": 0 },
+        "max_wall_ms": { "type": "integer", "minimum": 0 },
+        "max_payment_minor_units": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "ResourceSelector": {
+      "type": "object",
+      "description": "Points at one resource or a wildcard within a resource kind.",
+      "required": ["resource_kind", "resource_id"],
+      "properties": {
+        "resource_kind": { "$ref": "common.schema.json#/$defs/ResourceKind" },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact resource id, or '*' for any resource of this kind."
+        }
+      },
+      "additionalProperties": true
+    },
+    "ApprovalRequirement": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": { "$ref": "common.schema.json#/$defs/ApprovalMode" },
+        "threshold_risk": { "$ref": "common.schema.json#/$defs/RiskClass" },
+        "reviewer_ids": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/Id" }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

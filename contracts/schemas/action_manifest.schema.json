@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://beateros.dev/contracts/action_manifest.schema.json",
+  "title": "ActionManifest",
+  "description": "Predeclaration of a proposed side effect or observation. final.md section 12.3. Risk class can be raised by policy, never lowered by the agent. Unknown side effects require denial or review.",
+  "type": "object",
+  "required": [
+    "action_id",
+    "session_id",
+    "tool_id",
+    "action_type",
+    "target",
+    "inputs_digest",
+    "inputs_summary",
+    "expected_outputs",
+    "expected_side_effects",
+    "required_grants",
+    "risk_class",
+    "data_classes",
+    "idempotency_key",
+    "compensation_plan"
+  ],
+  "properties": {
+    "action_id": { "$ref": "common.schema.json#/$defs/Id" },
+    "session_id": { "$ref": "common.schema.json#/$defs/Id" },
+    "tool_id": { "$ref": "common.schema.json#/$defs/Id" },
+    "action_type": { "$ref": "common.schema.json#/$defs/ActionKind" },
+    "target": { "$ref": "common.schema.json#/$defs/ResourceSelector" },
+    "inputs_digest": { "$ref": "common.schema.json#/$defs/Digest" },
+    "inputs_summary": { "type": "string" },
+    "expected_outputs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Human-legible descriptions of expected outputs/observations."
+    },
+    "expected_side_effects": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/SideEffectClass" },
+      "description": "Declared side-effect classes. A side effect observed at runtime that is not in this list must be denied or escalated."
+    },
+    "required_grants": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/Id" },
+      "description": "Grant ids that must ALL admit this action (conjunctive)."
+    },
+    "risk_class": { "$ref": "common.schema.json#/$defs/RiskClass" },
+    "data_classes": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/DataClass" }
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable key so retries do not double-apply external effects."
+    },
+    "compensation_plan": {
+      "type": ["string", "null"],
+      "description": "How to undo/compensate this action if it must be rolled back, or null if the action is read-only / non-compensable and that has been acknowledged."
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://beateros.dev/contracts/capability_grant.schema.json",
+  "title": "CapabilityGrant",
+  "description": "Explicit authority. final.md section 12.2. Grants are never inferred from prompt text; they are issued objects. Invariants (holder cannot broaden, delegation must be equal-or-narrower, expired/revoked fail closed) are enforced by the policy engine, not by this schema, but the fields required to enforce them are mandated here.",
+  "type": "object",
+  "required": [
+    "grant_id",
+    "issuer",
+    "holder",
+    "session_id",
+    "resource",
+    "actions",
+    "constraints",
+    "expires_at",
+    "delegation",
+    "approval_requirements",
+    "revocation_handle",
+    "policy_version",
+    "reason"
+  ],
+  "properties": {
+    "grant_id": { "$ref": "common.schema.json#/$defs/Id" },
+    "issuer": { "$ref": "common.schema.json#/$defs/Id" },
+    "holder": { "$ref": "common.schema.json#/$defs/Id" },
+    "session_id": { "$ref": "common.schema.json#/$defs/Id" },
+    "resource": { "$ref": "common.schema.json#/$defs/ResourceSelector" },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "common.schema.json#/$defs/ActionKind" },
+      "description": "The action kinds this grant authorizes on the resource."
+    },
+    "constraints": {
+      "type": "object",
+      "description": "Narrowing constraints. A grant with no meaningful constraints is a review smell (final.md 3.3: if authority cannot be summarized, it is too broad).",
+      "properties": {
+        "max_risk": { "$ref": "common.schema.json#/$defs/RiskClass" },
+        "max_data_class": { "$ref": "common.schema.json#/$defs/DataClass" },
+        "budget": { "$ref": "common.schema.json#/$defs/Budget" },
+        "network_allowlist": { "type": "array", "items": { "type": "string" } },
+        "path_prefixes": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "expires_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "delegation": { "$ref": "common.schema.json#/$defs/DelegationMode" },
+    "approval_requirements": { "$ref": "common.schema.json#/$defs/ApprovalRequirement" },
+    "revocation_handle": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Handle used to revoke this grant. Revoked grants fail closed."
+    },
+    "policy_version": { "type": "string", "minLength": 1 },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-legible justification for the grant."
+    }
+  },
+  "additionalProperties": true
+}

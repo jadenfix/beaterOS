@@ -1,0 +1,16 @@
+{
+  "decision_id": "dec_write_parser_fix",
+  "action_id": "act_write_parser_fix",
+  "policy_version": "policy-2026.07.0",
+  "result": "allowed",
+  "matched_rules": [
+    "grant.holder==actor",
+    "grant.session==action.session",
+    "action.target within grant.path_prefixes",
+    "action.risk_class <= grant.max_risk"
+  ],
+  "explanation": "Write is inside the granted parser path prefix, risk is low (<= grant max medium), and the acting agent holds the grant for this session.",
+  "required_review": false,
+  "required_simulation": false,
+  "created_at": "2026-07-03T18:05:00Z"
+}

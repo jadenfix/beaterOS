@@ -1,0 +1,28 @@
+{
+  "grant_id": "grant_repo_rw_01",
+  "issuer": "human:jaden",
+  "holder": "agent:coder-1",
+  "session_id": "sess_01J8Z4",
+  "resource": {
+    "resource_kind": "file_path",
+    "resource_id": "/workspace/beateros/crates/parser"
+  },
+  "actions": ["read", "write", "execute"],
+  "constraints": {
+    "max_risk": "medium",
+    "max_data_class": "code",
+    "budget": { "max_tool_calls": 200 },
+    "network_allowlist": [],
+    "path_prefixes": ["/workspace/beateros/crates/parser"]
+  },
+  "expires_at": "2026-07-03T20:00:00Z",
+  "delegation": "attenuated_only",
+  "approval_requirements": {
+    "mode": "none",
+    "threshold_risk": "high",
+    "reviewer_ids": []
+  },
+  "revocation_handle": "rev:grant_repo_rw_01",
+  "policy_version": "policy-2026.07.0",
+  "reason": "Scoped read/write/execute in the parser crate to fix a failing test."
+}

@@ -1,0 +1,15 @@
+{
+  "receipt_id": "rcpt_write_parser_fix",
+  "action_id": "act_write_parser_fix",
+  "tool_id": "tool:fs.write",
+  "started_at": "2026-07-03T18:05:01Z",
+  "finished_at": "2026-07-03T18:05:01Z",
+  "status": "succeeded",
+  "input_digest": "sha256:6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+  "output_digest": "sha256:d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35",
+  "side_effect_summary": "Wrote 1 file (crates/parser/src/lexer.rs), 3 lines changed.",
+  "external_ids": [],
+  "artifact_refs": ["cas://sha256:d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35"],
+  "previous_receipt_hash": null,
+  "receipt_hash": "sha256:4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce"
+}

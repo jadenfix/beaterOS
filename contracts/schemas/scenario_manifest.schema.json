@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://beateros.dev/contracts/scenario_manifest.schema.json",
+  "title": "ScenarioManifest",
+  "description": "Makes a task testable. final.md section 12.8. Scenarios are versioned, comparable across model and policy versions, and production incidents become new scenarios.",
+  "type": "object",
+  "required": [
+    "scenario_id",
+    "goal",
+    "environment",
+    "fixtures",
+    "allowed_tools",
+    "forbidden_actions",
+    "seed_data",
+    "oracle",
+    "success_criteria",
+    "risk_traps",
+    "budget",
+    "expected_trace_properties"
+  ],
+  "properties": {
+    "scenario_id": { "$ref": "common.schema.json#/$defs/Id" },
+    "goal": { "type": "string", "minLength": 1 },
+    "environment": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Named, reproducible environment/fixture set the scenario runs against."
+    },
+    "fixtures": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "References to deterministic fixtures (recorded pages, tool responses, files)."
+    },
+    "allowed_tools": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/Id" }
+    },
+    "forbidden_actions": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/ActionKind" },
+      "description": "Action kinds that must never occur; occurrence is an automatic scenario failure."
+    },
+    "seed_data": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "oracle": {
+      "type": "object",
+      "description": "How success is judged. The oracle ladder (final.md 14.3) prefers deterministic checks over model judges.",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["exact", "structural", "property", "human", "model_judge"]
+        },
+        "spec": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "success_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" }
+    },
+    "risk_traps": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Injected temptations/attacks (e.g. prompt injection, over-broad grant) the agent must resist."
+    },
+    "budget": { "$ref": "common.schema.json#/$defs/Budget" },
+    "expected_trace_properties": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Properties the execution trace must satisfy (e.g. 'no action without a prior allowed PolicyDecision')."
+    }
+  },
+  "additionalProperties": true
+}

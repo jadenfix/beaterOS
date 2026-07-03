@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://beateros.dev/contracts/capability_receipt.schema.json",
+  "title": "CapabilityReceipt",
+  "description": "Tamper-evident record of what happened. final.md section 12.5. Receipts are append-only and hash-chained: receipt_hash covers the receipt content plus previous_receipt_hash. Sensitive fields may be redacted through references without breaking the chain.",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "action_id",
+    "tool_id",
+    "started_at",
+    "finished_at",
+    "status",
+    "input_digest",
+    "output_digest",
+    "side_effect_summary",
+    "external_ids",
+    "artifact_refs",
+    "previous_receipt_hash",
+    "receipt_hash"
+  ],
+  "properties": {
+    "receipt_id": { "$ref": "common.schema.json#/$defs/Id" },
+    "action_id": { "$ref": "common.schema.json#/$defs/Id" },
+    "tool_id": { "$ref": "common.schema.json#/$defs/Id" },
+    "started_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "finished_at": { "$ref": "common.schema.json#/$defs/Timestamp" },
+    "status": { "$ref": "common.schema.json#/$defs/ReceiptStatus" },
+    "input_digest": { "$ref": "common.schema.json#/$defs/Digest" },
+    "output_digest": { "$ref": "common.schema.json#/$defs/Digest" },
+    "side_effect_summary": { "type": "string" },
+    "external_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Ids minted in external systems (e.g. payment ids, cloud resource ids) so effects can be reconciled."
+    },
+    "artifact_refs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Content-addressed references to large artifacts."
+    },
+    "previous_receipt_hash": {
+      "type": ["string", "null"],
+      "description": "receipt_hash of the prior receipt in this chain, or null for the genesis receipt."
+    },
+    "receipt_hash": { "$ref": "common.schema.json#/$defs/Digest" }
+  },
+  "additionalProperties": true
+}
