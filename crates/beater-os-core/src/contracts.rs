@@ -282,11 +282,23 @@ fn default_max_data_class() -> Option<DataClass> {
     Some(DataClass::Internal)
 }
 
+/// Constraints attached to a capability grant.
+///
+/// Two defaulting models coexist here, and the asymmetry is deliberate:
+///
+/// - `max_risk` / `max_data_class` are **safety ceilings**. An omitted field
+///   fails closed at the bounded cap (see [`default_max_risk`] /
+///   [`default_max_data_class`]); "no ceiling" must be an explicit, auditable
+///   `null`. This is why they do not use a plain `#[serde(default)]`, which for
+///   `Option<T>` would be `None` (unbounded) — a fail-open on a partial object.
+/// - `budget`, `network_allowlist`, and `path_prefixes` are **additive
+///   restrictions**, not safety caps. An omitted/empty value adds no restriction
+///   from this grant: an empty allowlist/prefix set means "this grant imposes no
+///   extra network/path bound", and an all-`None` budget defers to the session
+///   budget. Absence here is intentionally permissive, not a fail-open, so a
+///   plain `#[serde(default)]` is correct for them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantConstraints {
-    // These default to the safe caps (not `None`) so a *partial* `constraints`
-    // object in JSON cannot silently drop the risk/data ceilings. `None` means
-    // "no ceiling" and must be an explicit `null`, never an omission.
     #[serde(default = "default_max_risk")]
     pub max_risk: Option<RiskClass>,
     #[serde(default = "default_max_data_class")]
