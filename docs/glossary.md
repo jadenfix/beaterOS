@@ -71,9 +71,13 @@ section references point to the authoritative definition.
 ## Process (this repo)
 
 - **DPR (Deep PR Review)** — an independent, adversarial review by a non-author,
-  recorded as a GitHub review verdict. See
-  [`multi-agent-review-protocol.md`](multi-agent-review-protocol.md).
+  recorded as a GitHub review verdict and in the agent-layer ledger. See the
+  review gate in [`governance/review-checklist.md`](governance/review-checklist.md).
 - **Slice** — one coherent, review-sized feature mapped to a `final.md` section.
-- **Coordination log** — the append-only ledger where agents claim slices and
-  keep write scopes disjoint. See
-  [`agent-coordination-log.md`](agent-coordination-log.md).
+  Slices and their dependencies are tracked in
+  [`implementation-backlog.md`](implementation-backlog.md).
+- **Coordination ledger** — the append-only agent-layer record of who authored,
+  reviewed, and merged each PR (approvals can't use GitHub's Approve state because
+  all agents share one account). See
+  [`governance/coordination-ledger.md`](governance/coordination-ledger.md), linted
+  by [`scripts/check-governance.py`](../scripts/check-governance.py).
