@@ -269,11 +269,27 @@ impl CapabilityScope {
     }
 }
 
+/// Default risk ceiling for a grant. An absent `max_risk` must fail closed at a
+/// bounded ceiling, never at "unlimited". Callers that genuinely want no ceiling
+/// opt in explicitly with `max_risk: null`.
+fn default_max_risk() -> Option<RiskClass> {
+    Some(RiskClass::Medium)
+}
+
+/// Default data-class ceiling for a grant. See [`default_max_risk`]: absence must
+/// fail closed at a bounded class, not at "unlimited".
+fn default_max_data_class() -> Option<DataClass> {
+    Some(DataClass::Internal)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantConstraints {
-    #[serde(default)]
+    // These default to the safe caps (not `None`) so a *partial* `constraints`
+    // object in JSON cannot silently drop the risk/data ceilings. `None` means
+    // "no ceiling" and must be an explicit `null`, never an omission.
+    #[serde(default = "default_max_risk")]
     pub max_risk: Option<RiskClass>,
-    #[serde(default)]
+    #[serde(default = "default_max_data_class")]
     pub max_data_class: Option<DataClass>,
     #[serde(default)]
     pub budget: Budget,
@@ -286,8 +302,8 @@ pub struct GrantConstraints {
 impl Default for GrantConstraints {
     fn default() -> Self {
         Self {
-            max_risk: Some(RiskClass::Medium),
-            max_data_class: Some(DataClass::Internal),
+            max_risk: default_max_risk(),
+            max_data_class: default_max_data_class(),
             budget: Budget::default(),
             network_allowlist: BTreeSet::new(),
             path_prefixes: BTreeSet::new(),
