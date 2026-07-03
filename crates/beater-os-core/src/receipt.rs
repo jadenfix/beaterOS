@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::contracts::SideEffectClass;
+use crate::contracts::{CapabilitySelector, SideEffectClass};
 use crate::error::{BeaterOsError, BeaterOsResult};
 use crate::hash::{GENESIS_HASH, HashValue, hash_json};
 
@@ -11,6 +11,7 @@ pub struct CapabilityReceiptInput {
     pub receipt_id: Option<String>,
     pub action_id: String,
     pub tool_id: String,
+    pub target: CapabilitySelector,
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
     pub status: String,
@@ -31,6 +32,7 @@ pub struct CapabilityReceipt {
     pub seq: u64,
     pub action_id: String,
     pub tool_id: String,
+    pub target: CapabilitySelector,
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
     pub status: String,
@@ -53,6 +55,7 @@ struct ReceiptHashView<'a> {
     seq: u64,
     action_id: &'a str,
     tool_id: &'a str,
+    target: &'a CapabilitySelector,
     started_at: &'a DateTime<Utc>,
     finished_at: &'a DateTime<Utc>,
     status: &'a str,
@@ -72,6 +75,7 @@ impl<'a> From<&'a CapabilityReceipt> for ReceiptHashView<'a> {
             seq: receipt.seq,
             action_id: &receipt.action_id,
             tool_id: &receipt.tool_id,
+            target: &receipt.target,
             started_at: &receipt.started_at,
             finished_at: &receipt.finished_at,
             status: &receipt.status,
@@ -116,6 +120,7 @@ impl ReceiptLedger {
             seq,
             action_id: input.action_id,
             tool_id: input.tool_id,
+            target: input.target,
             started_at: input.started_at,
             finished_at: input.finished_at,
             status: input.status,

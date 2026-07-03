@@ -72,6 +72,10 @@ fn read_manifest() -> ActionManifest {
             resource_kind: ResourceKind::FilePath,
             resource_id: "/workspace/repo".to_string(),
         },
+        resolved_target: Some(CapabilitySelector {
+            resource_kind: ResourceKind::FilePath,
+            resource_id: "/workspace/repo".to_string(),
+        }),
         inputs_digest: "sha256:input".to_string(),
         inputs_summary: "read repo files".to_string(),
         expected_outputs: vec!["file summaries".to_string()],
@@ -154,6 +158,33 @@ fn policy_enforces_path_prefix_constraints_even_with_wildcard_resource() {
 }
 
 #[test]
+fn policy_rejects_file_path_traversal_and_missing_resolved_target() {
+    let now = fixed_time();
+    let mut grant = grant_for_file(now);
+    grant.scope.selector.resource_id = "*".to_string();
+
+    let mut traversal_manifest = read_manifest();
+    traversal_manifest.target.resource_id = "/workspace/repo/../secret".to_string();
+    traversal_manifest.resolved_target = Some(CapabilitySelector {
+        resource_kind: ResourceKind::FilePath,
+        resource_id: "/workspace/secret".to_string(),
+    });
+    let decision = PolicyEngine::new().admit(
+        &traversal_manifest,
+        &admission_context(now, vec![grant.clone()]),
+    );
+    assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
+
+    let mut missing_resolved_manifest = read_manifest();
+    missing_resolved_manifest.resolved_target = None;
+    let decision = PolicyEngine::new().admit(
+        &missing_resolved_manifest,
+        &admission_context(now, vec![grant]),
+    );
+    assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
+}
+
+#[test]
 fn policy_enforces_network_allowlist_constraints() {
     let now = fixed_time();
     let mut manifest = read_manifest();
@@ -196,6 +227,16 @@ fn policy_enforces_budget_constraints() {
     let now = fixed_time();
     let mut manifest = read_manifest();
     manifest.requested_budget.max_model_cents = Some(500);
+    let mut grant = grant_for_file(now);
+    grant.constraints.budget.max_model_cents = Some(100);
+    let decision = PolicyEngine::new().admit(&manifest, &admission_context(now, vec![grant]));
+    assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
+}
+
+#[test]
+fn policy_fails_closed_when_limited_budget_is_omitted() {
+    let now = fixed_time();
+    let manifest = read_manifest();
     let mut grant = grant_for_file(now);
     grant.constraints.budget.max_model_cents = Some(100);
     let decision = PolicyEngine::new().admit(&manifest, &admission_context(now, vec![grant]));
@@ -289,6 +330,91 @@ fn policy_requires_action_bound_review_evidence() {
 }
 
 #[test]
+fn policy_rejects_future_dated_review_evidence() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Deploy;
+    manifest.target = CapabilitySelector {
+        resource_kind: ResourceKind::CloudResource,
+        resource_id: "staging".to_string(),
+    };
+    manifest.expected_side_effects = set([SideEffectClass::Deployment]);
+    manifest.required_grants = set(["grant-deploy".to_string()]);
+    manifest.risk_class = RiskClass::High;
+    manifest.idempotency_key = Some("deploy-once".to_string());
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-deploy".to_string();
+    grant.scope.selector.resource_kind = ResourceKind::CloudResource;
+    grant.scope.selector.resource_id = "staging".to_string();
+    grant.scope.actions = set([ActionKind::Deploy]);
+    grant.constraints.max_risk = Some(RiskClass::High);
+    grant.approval = ApprovalRequirement {
+        mode: ApprovalMode::Human,
+        threshold_risk: RiskClass::High,
+        reviewer_ids: vec!["user:jaden".to_string()],
+    };
+    let mut ctx = admission_context(now, vec![grant]);
+    ctx.approvals.push(ApprovalEvidence {
+        review_id: "review-1".to_string(),
+        action_id: "action-1".to_string(),
+        grant_id: "grant-deploy".to_string(),
+        reviewer_id: "user:jaden".to_string(),
+        approved_at: now + Duration::minutes(1),
+        policy_version: "policy-v1".to_string(),
+    });
+    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsApproval);
+}
+
+#[test]
+fn policy_requires_all_reviewers_for_multiparty_approval() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Deploy;
+    manifest.target = CapabilitySelector {
+        resource_kind: ResourceKind::CloudResource,
+        resource_id: "staging".to_string(),
+    };
+    manifest.expected_side_effects = set([SideEffectClass::Deployment]);
+    manifest.required_grants = set(["grant-deploy".to_string()]);
+    manifest.risk_class = RiskClass::High;
+    manifest.idempotency_key = Some("deploy-once".to_string());
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-deploy".to_string();
+    grant.scope.selector.resource_kind = ResourceKind::CloudResource;
+    grant.scope.selector.resource_id = "staging".to_string();
+    grant.scope.actions = set([ActionKind::Deploy]);
+    grant.constraints.max_risk = Some(RiskClass::High);
+    grant.approval = ApprovalRequirement {
+        mode: ApprovalMode::MultiParty,
+        threshold_risk: RiskClass::High,
+        reviewer_ids: vec!["user:jaden".to_string(), "user:reviewer2".to_string()],
+    };
+    let mut ctx = admission_context(now, vec![grant]);
+    ctx.approvals.push(ApprovalEvidence {
+        review_id: "review-1".to_string(),
+        action_id: "action-1".to_string(),
+        grant_id: "grant-deploy".to_string(),
+        reviewer_id: "user:jaden".to_string(),
+        approved_at: now,
+        policy_version: "policy-v1".to_string(),
+    });
+    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsApproval);
+
+    ctx.approvals.push(ApprovalEvidence {
+        review_id: "review-2".to_string(),
+        action_id: "action-1".to_string(),
+        grant_id: "grant-deploy".to_string(),
+        reviewer_id: "user:reviewer2".to_string(),
+        approved_at: now,
+        policy_version: "policy-v1".to_string(),
+    });
+    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsSimulation);
+}
+
+#[test]
 fn policy_requires_action_bound_simulation_evidence() {
     let now = fixed_time();
     let mut manifest = read_manifest();
@@ -337,6 +463,50 @@ fn policy_requires_action_bound_simulation_evidence() {
 }
 
 #[test]
+fn policy_rejects_future_dated_simulation_evidence() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Deploy;
+    manifest.target = CapabilitySelector {
+        resource_kind: ResourceKind::CloudResource,
+        resource_id: "staging".to_string(),
+    };
+    manifest.expected_side_effects = set([SideEffectClass::Deployment]);
+    manifest.required_grants = set(["grant-deploy".to_string()]);
+    manifest.risk_class = RiskClass::High;
+    manifest.idempotency_key = Some("deploy-once".to_string());
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-deploy".to_string();
+    grant.scope.selector.resource_kind = ResourceKind::CloudResource;
+    grant.scope.selector.resource_id = "staging".to_string();
+    grant.scope.actions = set([ActionKind::Deploy]);
+    grant.constraints.max_risk = Some(RiskClass::High);
+    grant.approval = ApprovalRequirement {
+        mode: ApprovalMode::Human,
+        threshold_risk: RiskClass::High,
+        reviewer_ids: vec!["user:jaden".to_string()],
+    };
+    let mut ctx = admission_context(now, vec![grant]);
+    ctx.approvals.push(ApprovalEvidence {
+        review_id: "review-1".to_string(),
+        action_id: "action-1".to_string(),
+        grant_id: "grant-deploy".to_string(),
+        reviewer_id: "user:jaden".to_string(),
+        approved_at: now,
+        policy_version: "policy-v1".to_string(),
+    });
+    ctx.simulations.push(SimulationEvidence {
+        simulation_id: "sim-1".to_string(),
+        action_id: "action-1".to_string(),
+        scenario_id: "deploy-scenario".to_string(),
+        passed_at: now + Duration::minutes(1),
+        policy_version: "policy-v1".to_string(),
+    });
+    let decision = PolicyEngine::new().admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsSimulation);
+}
+
+#[test]
 fn journal_detects_event_tampering() -> Result<(), Box<dyn std::error::Error>> {
     let now = fixed_time();
     let manifest = read_manifest();
@@ -368,22 +538,29 @@ fn journal_detects_event_tampering() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn receipt_for_action(action_id: &str, now: chrono::DateTime<Utc>) -> CapabilityReceipt {
+fn receipt_for_manifest(
+    manifest: &ActionManifest,
+    now: chrono::DateTime<Utc>,
+) -> CapabilityReceipt {
     let mut ledger = ReceiptLedger::new();
     ledger
         .append(CapabilityReceiptInput {
-            receipt_id: Some(format!("receipt-{action_id}")),
-            action_id: action_id.to_string(),
-            tool_id: "tool:writer".to_string(),
+            receipt_id: Some(format!("receipt-{}", manifest.action_id)),
+            action_id: manifest.action_id.clone(),
+            tool_id: manifest.tool_id.clone(),
+            target: manifest
+                .resolved_target
+                .clone()
+                .unwrap_or_else(|| manifest.target.clone()),
             started_at: now,
             finished_at: now + Duration::milliseconds(10),
             status: "succeeded".to_string(),
-            input_digest: "sha256:in".to_string(),
+            input_digest: manifest.inputs_digest.clone(),
             output_digest: "sha256:out".to_string(),
-            side_effect_summary: "wrote a file".to_string(),
-            side_effects: vec![SideEffectClass::LocalWrite],
+            side_effect_summary: "read files".to_string(),
+            side_effects: manifest.expected_side_effects.iter().copied().collect(),
             external_ids: Vec::new(),
-            artifact_refs: vec!["diff:1".to_string()],
+            artifact_refs: Vec::new(),
         })
         .unwrap_or_else(|err| panic!("receipt fixture should be valid: {err}"))
 }
@@ -393,7 +570,7 @@ fn journal_rejects_receipt_without_prior_allowed_decision() -> Result<(), Box<dy
 {
     let now = fixed_time();
     let manifest = read_manifest();
-    let receipt = receipt_for_action("action-1", now);
+    let receipt = receipt_for_manifest(&manifest, now);
     let mut journal = InMemoryJournal::new();
     journal.append(
         JournalEvent::ActionProposed {
@@ -427,7 +604,7 @@ fn journal_accepts_receipt_after_prior_allowed_decision() -> Result<(), Box<dyn 
 {
     let now = fixed_time();
     let manifest = read_manifest();
-    let receipt = receipt_for_action("action-1", now);
+    let receipt = receipt_for_manifest(&manifest, now);
     let mut journal = InMemoryJournal::new();
     journal.append(
         JournalEvent::ActionProposed {
@@ -457,6 +634,41 @@ fn journal_accepts_receipt_after_prior_allowed_decision() -> Result<(), Box<dyn 
 }
 
 #[test]
+fn journal_rejects_receipt_that_does_not_match_manifest() -> Result<(), Box<dyn std::error::Error>>
+{
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let mut receipt = receipt_for_manifest(&manifest, now);
+    receipt.tool_id = "tool:other".to_string();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::ActionProposed {
+            manifest: manifest.clone(),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::PolicyDecided {
+            decision: PolicyDecision {
+                decision_id: "decision-1".to_string(),
+                action_id: manifest.action_id,
+                policy_version: "policy-v1".to_string(),
+                result: DecisionResult::Allowed,
+                matched_rules: Vec::new(),
+                explanation: "allowed in fixture".to_string(),
+                required_review: None,
+                required_simulation: None,
+                created_at: now,
+            },
+        },
+        now,
+    )?;
+    journal.append(JournalEvent::ReceiptAppended { receipt }, now)?;
+    assert!(journal.verify_chain().is_err());
+    Ok(())
+}
+
+#[test]
 fn receipt_ledger_detects_reordered_or_edited_receipts() -> Result<(), Box<dyn std::error::Error>> {
     let now = fixed_time();
     let mut ledger = ReceiptLedger::new();
@@ -464,6 +676,10 @@ fn receipt_ledger_detects_reordered_or_edited_receipts() -> Result<(), Box<dyn s
         receipt_id: Some("receipt-1".to_string()),
         action_id: "action-1".to_string(),
         tool_id: "tool:writer".to_string(),
+        target: CapabilitySelector {
+            resource_kind: ResourceKind::FilePath,
+            resource_id: "/workspace/repo/file.txt".to_string(),
+        },
         started_at: now,
         finished_at: now + Duration::milliseconds(10),
         status: "succeeded".to_string(),
@@ -478,6 +694,10 @@ fn receipt_ledger_detects_reordered_or_edited_receipts() -> Result<(), Box<dyn s
         receipt_id: Some("receipt-2".to_string()),
         action_id: "action-2".to_string(),
         tool_id: "tool:test".to_string(),
+        target: CapabilitySelector {
+            resource_kind: ResourceKind::Tool,
+            resource_id: "cargo:test".to_string(),
+        },
         started_at: now,
         finished_at: now + Duration::milliseconds(20),
         status: "succeeded".to_string(),

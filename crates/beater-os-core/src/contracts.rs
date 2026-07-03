@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -186,7 +187,8 @@ impl Budget {
 fn within_optional_limit(requested: Option<u64>, limit: Option<u64>) -> bool {
     match (requested, limit) {
         (Some(requested), Some(limit)) => requested <= limit,
-        (Some(_), None) | (None, _) => true,
+        (Some(_), None) | (None, None) => true,
+        (None, Some(_)) => false,
     }
 }
 
@@ -368,10 +370,26 @@ impl CapabilityGrant {
         {
             return true;
         }
-        self.constraints
-            .path_prefixes
-            .iter()
-            .any(|prefix| path_is_inside_prefix(&manifest.target.resource_id, prefix))
+        let Some(resolved_target) = &manifest.resolved_target else {
+            return false;
+        };
+        if resolved_target.resource_kind != ResourceKind::FilePath {
+            return false;
+        }
+        let Some(requested_path) = normalized_absolute_path(&manifest.target.resource_id) else {
+            return false;
+        };
+        let Some(resolved_path) = normalized_absolute_path(&resolved_target.resource_id) else {
+            return false;
+        };
+        self.constraints.path_prefixes.iter().any(|prefix| {
+            normalized_absolute_path(prefix)
+                .map(|normalized_prefix| {
+                    path_is_inside_prefix(&requested_path, &normalized_prefix)
+                        && path_is_inside_prefix(&resolved_path, &normalized_prefix)
+                })
+                .unwrap_or(false)
+        })
     }
 
     fn network_constraints_allow(&self, manifest: &ActionManifest) -> bool {
@@ -395,6 +413,26 @@ fn path_is_inside_prefix(path: &str, prefix: &str) -> bool {
     let mut normalized_prefix = prefix.trim_end_matches('/').to_string();
     normalized_prefix.push('/');
     path.starts_with(&normalized_prefix)
+}
+
+fn normalized_absolute_path(path: &str) -> Option<String> {
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
+            Component::CurDir | Component::ParentDir | Component::Prefix(_) => return None,
+        }
+    }
+    if parts.is_empty() {
+        Some("/".to_string())
+    } else {
+        Some(format!("/{}", parts.join("/")))
+    }
 }
 
 fn network_host(endpoint: &str) -> String {
@@ -425,6 +463,8 @@ pub struct ActionManifest {
     pub tool_id: String,
     pub action_kind: ActionKind,
     pub target: CapabilitySelector,
+    #[serde(default)]
+    pub resolved_target: Option<CapabilitySelector>,
     pub inputs_digest: String,
     pub inputs_summary: String,
     #[serde(default)]

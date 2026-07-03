@@ -139,7 +139,7 @@ impl InMemoryJournal {
 
     pub fn verify_chain(&self) -> BeaterOsResult<JournalVerificationReport> {
         let mut prev_hash = GENESIS_HASH.to_string();
-        let mut proposed_actions = BTreeSet::new();
+        let mut proposed_actions: BTreeMap<String, ActionManifest> = BTreeMap::new();
         let mut allowed_decisions = BTreeSet::new();
         let mut latest_decision_by_action: BTreeMap<String, DecisionResult> = BTreeMap::new();
         for (idx, record) in self.records.iter().enumerate() {
@@ -182,13 +182,16 @@ impl InMemoryJournal {
 
 fn verify_event_causality(
     record: &JournalRecord,
-    proposed_actions: &mut BTreeSet<String>,
+    proposed_actions: &mut BTreeMap<String, ActionManifest>,
     allowed_decisions: &mut BTreeSet<String>,
     latest_decision_by_action: &mut BTreeMap<String, DecisionResult>,
 ) -> BeaterOsResult<()> {
     match &record.event {
         JournalEvent::ActionProposed { manifest } => {
-            if !proposed_actions.insert(manifest.action_id.clone()) {
+            if proposed_actions
+                .insert(manifest.action_id.clone(), manifest.clone())
+                .is_some()
+            {
                 return causality_error(
                     record.seq,
                     format!("action {} was proposed more than once", manifest.action_id),
@@ -196,7 +199,7 @@ fn verify_event_causality(
             }
         }
         JournalEvent::PolicyDecided { decision } => {
-            if !proposed_actions.contains(&decision.action_id) {
+            if !proposed_actions.contains_key(&decision.action_id) {
                 return causality_error(
                     record.seq,
                     format!(
@@ -213,6 +216,15 @@ fn verify_event_causality(
             }
         }
         JournalEvent::ReceiptAppended { receipt } => {
+            let Some(manifest) = proposed_actions.get(&receipt.action_id) else {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "receipt {} references action {} before it was proposed",
+                        receipt.receipt_id, receipt.action_id
+                    ),
+                );
+            };
             if !allowed_decisions.contains(&receipt.action_id) {
                 let latest = latest_decision_by_action
                     .get(&receipt.action_id)
@@ -223,6 +235,50 @@ fn verify_event_causality(
                     format!(
                         "receipt {} references action {} without a prior allowed decision (latest decision: {})",
                         receipt.receipt_id, receipt.action_id, latest
+                    ),
+                );
+            }
+            if receipt.tool_id != manifest.tool_id {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "receipt {} tool {} does not match action {} tool {}",
+                        receipt.receipt_id, receipt.tool_id, manifest.action_id, manifest.tool_id
+                    ),
+                );
+            }
+            if receipt.input_digest != manifest.inputs_digest {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "receipt {} input digest does not match action {} input digest",
+                        receipt.receipt_id, manifest.action_id
+                    ),
+                );
+            }
+            let expected_target = manifest
+                .resolved_target
+                .as_ref()
+                .unwrap_or(&manifest.target);
+            if &receipt.target != expected_target {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "receipt {} target does not match action {} target",
+                        receipt.receipt_id, manifest.action_id
+                    ),
+                );
+            }
+            if receipt
+                .side_effects
+                .iter()
+                .any(|effect| !manifest.expected_side_effects.contains(effect))
+            {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "receipt {} contains side effects not declared by action {}",
+                        receipt.receipt_id, manifest.action_id
                     ),
                 );
             }

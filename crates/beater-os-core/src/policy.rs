@@ -216,21 +216,41 @@ fn has_approval_for_grant(
     manifest: &ActionManifest,
     ctx: &AdmissionContext,
 ) -> bool {
+    match grant.approval.mode {
+        ApprovalMode::None => true,
+        ApprovalMode::Human => grant
+            .approval
+            .reviewer_ids
+            .iter()
+            .any(|reviewer_id| has_approval_from_reviewer(grant, manifest, ctx, reviewer_id)),
+        ApprovalMode::MultiParty => {
+            !grant.approval.reviewer_ids.is_empty()
+                && grant.approval.reviewer_ids.iter().all(|reviewer_id| {
+                    has_approval_from_reviewer(grant, manifest, ctx, reviewer_id)
+                })
+        }
+    }
+}
+
+fn has_approval_from_reviewer(
+    grant: &CapabilityGrant,
+    manifest: &ActionManifest,
+    ctx: &AdmissionContext,
+    reviewer_id: &str,
+) -> bool {
     ctx.approvals.iter().any(|approval| {
-        approval.action_id == manifest.action_id
+        approval.approved_at <= ctx.now
+            && approval.action_id == manifest.action_id
             && approval.grant_id == grant.grant_id
             && approval.policy_version == ctx.policy_version
-            && grant
-                .approval
-                .reviewer_ids
-                .iter()
-                .any(|reviewer_id| reviewer_id == &approval.reviewer_id)
+            && approval.reviewer_id == reviewer_id
     })
 }
 
 fn has_passed_simulation_for_action(manifest: &ActionManifest, ctx: &AdmissionContext) -> bool {
     ctx.simulations.iter().any(|simulation| {
-        simulation.action_id == manifest.action_id
+        simulation.passed_at <= ctx.now
+            && simulation.action_id == manifest.action_id
             && simulation.policy_version == ctx.policy_version
     })
 }
