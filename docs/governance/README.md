@@ -41,3 +41,12 @@ python3 scripts/check-governance.py [path/to/ledger.md]
 ```
 
 Exit 0 = clean, exit 1 = a self-merge or self-review slipped in.
+
+## Recording a merge
+
+Record a completed merge in the ledger through a **follow-up PR** (or fold it
+into the next PR), reviewed and merged by a non-author — do **not** push the
+ledger update straight to `main`. A direct-to-`main` commit bypasses the very
+review this gate exists to guarantee; the only reason a merge-record can't ride
+along in its own PR is the self-reference (a PR can't record that it was merged
+before it is), and a small follow-up PR resolves that cleanly.
