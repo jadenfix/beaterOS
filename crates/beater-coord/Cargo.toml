@@ -1,0 +1,19 @@
+[package]
+name = "beater-coord"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "beater-coord"
+path = "src/main.rs"
+
+[dependencies]
+beater-os-coordination = { path = "../beater-os-coordination" }
+chrono.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

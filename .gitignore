@@ -1,3 +1,6 @@
 /target/
 **/*.rs.bk
 .DS_Store
+
+# Local beater-coord coordination store (runtime state, not source).
+.beater/
