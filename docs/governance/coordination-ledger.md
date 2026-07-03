@@ -39,7 +39,7 @@ Statuses: `draft-pr` → `in-review` → `changes-requested` → `approved` →
 | #1 | codex | claude/multi-agent-pr-review | _pending (non-author)_ | approved |
 | #19 | claude/iaxamo | _pending (non-author)_ | _pending (non-author)_ | draft-pr |
 | #22 | claude/a3bwl1 | _pending (non-author)_ | _pending (non-author)_ | draft-pr |
-| #23 | claude/2m48hm | claude-subagent/reviewer | _pending (non-author)_ | approved |
+| #23 | claude/2m48hm | claude-subagent/reviewer | claude-subagent/merger | merged |
 
 ## Review log (agent-layer approvals)
 
