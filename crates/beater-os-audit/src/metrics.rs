@@ -53,7 +53,9 @@ pub struct AuditMetrics {
     pub receipts: usize,
     /// Fraction of proposed actions that received at least one policy decision.
     pub decision_coverage: Coverage,
-    /// Fraction of allowed actions that produced at least one receipt.
+    /// Fraction of allowed actions that produced at least one receipt. An action
+    /// that is allowed and later re-decided as not-allowed is dropped from the
+    /// denominator (it is no longer an allowed action), by design.
     pub receipt_coverage: Coverage,
     /// Fraction of non-allowed decisions that carry a non-empty explanation.
     pub denial_explanation_coverage: Coverage,

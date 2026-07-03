@@ -128,6 +128,10 @@ fn check_sequence_contiguous(snapshot: &JournalSnapshot) -> CheckResult {
 
 /// Every record must link to its predecessor (genesis for the first) and
 /// carry a non-empty content hash.
+///
+/// This overlaps `beater-os-core`'s chain check on purpose: it is an
+/// independent second implementation (defense in depth). Do not "simplify" it
+/// away as redundant — if the two ever disagree, that is an auditable incident.
 fn check_hash_linkage(snapshot: &JournalSnapshot) -> CheckResult {
     let mut prev_hash = GENESIS_HASH.to_string();
     for record in &snapshot.records {

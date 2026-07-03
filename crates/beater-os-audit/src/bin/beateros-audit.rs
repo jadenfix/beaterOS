@@ -55,6 +55,13 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         }
     };
 
+    // Validate the command before touching input, so an unknown command reports
+    // itself rather than a downstream file/parse error.
+    if !matches!(command, "verify" | "show" | "metrics" | "bundle") {
+        eprint!("{USAGE}");
+        return Err(format!("unknown command: {command}"));
+    }
+
     let raw = read_source(source)?;
     let snapshot: JournalSnapshot = serde_json::from_str(&raw)
         .map_err(|err| format!("could not parse journal snapshot as JSON: {err}"))?;

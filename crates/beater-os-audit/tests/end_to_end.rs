@@ -242,7 +242,11 @@ fn detects_grant_used_before_it_was_issued() -> Result<(), BeaterOsError> {
     let snapshot = journal.snapshot();
     let report = verify_snapshot(&snapshot);
     assert!(!report.ok);
-    assert!(report.failures().any(|c| c.check == "grant_references"));
+    let failed: BTreeSet<&str> = report.failures().map(|c| c.check.as_str()).collect();
+    assert!(failed.contains("grant_references"));
+    // The core cryptographic chain accepts this journal; only the independent
+    // layer catches it. Assert that explicitly so the claim can't silently rot.
+    assert!(!failed.contains("cryptographic_chain"));
     Ok(())
 }
 
@@ -258,7 +262,9 @@ fn detects_grant_for_unknown_session() -> Result<(), BeaterOsError> {
     let snapshot = journal.snapshot();
     let report = verify_snapshot(&snapshot);
     assert!(!report.ok);
-    assert!(report.failures().any(|c| c.check == "referential_sessions"));
+    let failed: BTreeSet<&str> = report.failures().map(|c| c.check.as_str()).collect();
+    assert!(failed.contains("referential_sessions"));
+    assert!(!failed.contains("cryptographic_chain"));
     Ok(())
 }
 
@@ -293,7 +299,9 @@ fn detects_unexplained_denial() -> Result<(), BeaterOsError> {
     let snapshot = journal.snapshot();
     let report = verify_snapshot(&snapshot);
     assert!(!report.ok);
-    assert!(report.failures().any(|c| c.check == "denial_explained"));
+    let failed: BTreeSet<&str> = report.failures().map(|c| c.check.as_str()).collect();
+    assert!(failed.contains("denial_explained"));
+    assert!(!failed.contains("cryptographic_chain"));
     Ok(())
 }
 
