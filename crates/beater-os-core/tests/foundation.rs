@@ -1,11 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use beater_os_core::{
     ActionKind, ActionManifest, AdmissionContext, ApprovalEvidence, ApprovalMode,
     ApprovalRequirement, Budget, CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput,
     CapabilityScope, CapabilitySelector, DataClass, DecisionResult, DelegationMode,
     GrantConstraints, InMemoryJournal, JournalEvent, PolicyDecision, PolicyEngine, ReceiptLedger,
-    ResourceKind, RiskClass, SideEffectClass, SimulationEvidence, TaintLabel,
+    ResourceKind, RiskClass, SideEffectClass, SimulationEvidence, TaintLabel, ToolManifest,
 };
 use chrono::{Duration, TimeZone, Utc};
 
@@ -71,6 +71,7 @@ fn admission_context(now: chrono::DateTime<Utc>, grants: Vec<CapabilityGrant>) -
         grants,
         approvals: Vec::new(),
         simulations: Vec::new(),
+        tool_registry: BTreeMap::new(),
     }
 }
 
@@ -154,6 +155,104 @@ fn policy_requires_narrowed_grant_for_over_risk_action() {
     let ctx = admission_context(now, vec![grant_for_file(now)]);
     let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
+}
+
+fn registered_tool(
+    tool_id: &str,
+    risk_class: RiskClass,
+    side_effects: impl IntoIterator<Item = SideEffectClass>,
+) -> ToolManifest {
+    ToolManifest {
+        tool_id: tool_id.to_string(),
+        publisher: "publisher:beater".to_string(),
+        version: "1.0.0".to_string(),
+        transport: "mcp".to_string(),
+        required_capabilities: Vec::new(),
+        side_effects: set(side_effects),
+        risk_class,
+        sandbox_required: false,
+    }
+}
+
+fn registry(tools: impl IntoIterator<Item = ToolManifest>) -> BTreeMap<String, ToolManifest> {
+    tools
+        .into_iter()
+        .map(|tool| (tool.tool_id.clone(), tool))
+        .collect()
+}
+
+#[test]
+fn policy_denies_manifest_that_under_rates_registered_tool_risk() {
+    // The agent labels the action Low risk, but the kernel-registered tool is
+    // known to be High risk. Admission consumes the registered floor (#46).
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let mut ctx = admission_context(now, vec![grant_for_file(now)]);
+    ctx.tool_registry = registry([registered_tool(
+        &manifest.tool_id,
+        RiskClass::High,
+        [SideEffectClass::None],
+    )]);
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("under-rates risk"));
+}
+
+#[test]
+fn policy_denies_manifest_that_omits_a_registered_tool_side_effect() {
+    // The tool is registered as producing a network write; the agent declares
+    // no side effect to dodge the idempotency/simulation/approval gates.
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let mut ctx = admission_context(now, vec![grant_for_file(now)]);
+    ctx.tool_registry = registry([registered_tool(
+        &manifest.tool_id,
+        RiskClass::Low,
+        [SideEffectClass::NetworkWrite],
+    )]);
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("omits a side effect"));
+}
+
+#[test]
+fn policy_admits_manifest_that_over_declares_relative_to_registered_tool() {
+    // Over-declaring risk (Medium >= registered Low) is always safe and must
+    // still pass grounding; the grant caps at Medium so the action is allowed.
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.risk_class = RiskClass::Medium;
+    let mut ctx = admission_context(now, vec![grant_for_file(now)]);
+    ctx.tool_registry = registry([registered_tool(
+        &manifest.tool_id,
+        RiskClass::Low,
+        [SideEffectClass::None],
+    )]);
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Allowed);
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"manifest_consistent_with_registered_tool".to_string())
+    );
+}
+
+#[test]
+fn policy_leaves_unregistered_tool_to_the_rest_of_policy() {
+    // No registry entry for this tool: this slice cannot ground the claim and
+    // defers (fail-closed-on-unregistered-tool is deferred to #44). The
+    // grounding rule is still recorded so the audit trail is explicit.
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let ctx = admission_context(now, vec![grant_for_file(now)]);
+    assert!(ctx.tool_registry.is_empty());
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Allowed);
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"manifest_consistent_with_registered_tool".to_string())
+    );
 }
 
 #[test]

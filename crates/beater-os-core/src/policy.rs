@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::contracts::{
     ActionKind, ActionManifest, ApprovalEvidence, ApprovalMode, CapabilityGrant, DataClass,
     DecisionResult, PolicyDecision, RiskClass, SideEffectClass, SimulationEvidence, TaintLabel,
+    ToolManifest,
 };
 use crate::error::BeaterOsResult;
 use crate::hash::HashValue;
@@ -19,6 +20,12 @@ pub struct AdmissionContext {
     pub grants: Vec<CapabilityGrant>,
     pub approvals: Vec<ApprovalEvidence>,
     pub simulations: Vec<SimulationEvidence>,
+    /// Kernel-held ground truth about the tools an action may invoke, keyed by
+    /// `tool_id`. Registered out of band at (signed) tool-install time, never by
+    /// the agent per action. Admission grounds the agent's self-reported risk
+    /// and side effects against these entries; see
+    /// [`PolicyEngine::admit`] and issue #46.
+    pub tool_registry: BTreeMap<String, ToolManifest>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -105,6 +112,19 @@ impl PolicyEngine {
                 DecisionFollowup::none(),
             ));
         }
+
+        if let Some(reason) = manifest_understates_registered_tool(manifest, ctx) {
+            return Ok(decision(
+                manifest,
+                manifest_hash,
+                ctx,
+                DecisionResult::Denied,
+                matched_rules,
+                reason,
+                DecisionFollowup::none(),
+            ));
+        }
+        matched_rules.push("manifest_consistent_with_registered_tool".to_string());
 
         let matching_grants: Vec<&CapabilityGrant> = ctx
             .grants
@@ -266,6 +286,38 @@ pub fn derived_risk_floor(
     }
 
     floor
+}
+
+/// Ground the agent's self-reported manifest against kernel-held tool truth
+/// (issue #46). The agent authors `risk_class` and `expected_side_effects`, so
+/// an adversarial or injected agent can under-declare them to slip past the
+/// idempotency, simulation, and approval gates keyed off those fields. The tool
+/// registry records what the invoked tool is actually known to do, out of band
+/// from any single action. Admission therefore consumes the registered value as
+/// a floor: a manifest may over-declare risk or effects (stricter is always
+/// safe), but never under-declare below the registered tool.
+///
+/// Returns `Some(reason)` when the manifest understates the registered tool, or
+/// `None` when it is consistent — or when the tool has no registry entry, which
+/// this slice cannot ground and leaves to the rest of policy. Failing closed on
+/// an *unregistered* tool is deliberately deferred: it is coupled to the
+/// tool-registration lifecycle (issue #44) and would change admission for every
+/// caller that has not yet wired a registry.
+fn manifest_understates_registered_tool(
+    manifest: &ActionManifest,
+    ctx: &AdmissionContext,
+) -> Option<&'static str> {
+    let tool = ctx.tool_registry.get(&manifest.tool_id)?;
+    if manifest.risk_class < tool.risk_class {
+        return Some("manifest under-rates risk below the registered tool floor");
+    }
+    let omits_registered_side_effect = tool.side_effects.iter().any(|effect| {
+        *effect != SideEffectClass::None && !manifest.expected_side_effects.contains(effect)
+    });
+    if omits_registered_side_effect {
+        return Some("manifest omits a side effect the registered tool is known to produce");
+    }
+    None
 }
 
 fn dangerous_untrusted_instruction(manifest: &ActionManifest) -> bool {

@@ -299,6 +299,7 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         grants: projection.active_grants(now),
         approvals: Vec::new(),
         simulations: Vec::new(),
+        tool_registry: std::collections::BTreeMap::new(),
     };
     // `admit` is fallible because it digests the manifest; propagate any
     // hashing error rather than pretending a decision was reached.
