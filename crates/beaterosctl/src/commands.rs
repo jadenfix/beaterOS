@@ -300,6 +300,7 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         grants: projection.active_grants(now),
         approvals: Vec::new(),
         simulations: Vec::new(),
+        mandates: Vec::new(),
         revoked_handles: std::collections::BTreeSet::new(),
     };
     // `admit` is fallible because it digests the manifest; propagate any
