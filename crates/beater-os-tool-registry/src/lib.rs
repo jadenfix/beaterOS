@@ -42,7 +42,7 @@
 //!
 //! let mut registry = ToolRegistry::new(policy);
 //! let schema = r#"{"name":"fs.read","args":["path"]}"#;
-//! let digest = content_digest(schema);
+//! let digest = content_digest(schema).unwrap();
 //!
 //! let manifest = ToolManifest {
 //!     tool_id: "fs.read".into(),

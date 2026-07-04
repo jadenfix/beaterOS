@@ -29,7 +29,7 @@ fn manifest(tool_id: &str, version: &str, risk: RiskClass, sandbox: bool) -> Too
 
 /// A registered tool, signed by the trusted publisher, tests passing, trusted.
 fn signed_tool(tool_id: &str, version: &str, risk: RiskClass, sandbox: bool) -> RegisteredTool {
-    let digest = content_digest(&format!("{tool_id}@{version}"));
+    let digest = content_digest(&format!("{tool_id}@{version}")).expect("digest");
     RegisteredTool {
         manifest: manifest(tool_id, version, risk, sandbox),
         content_digest: digest.clone(),
@@ -341,6 +341,43 @@ fn stricter_policy_refuses_over_ceiling_tool() {
         matches!(err, RegistryError::RiskCeilingExceeded { .. }),
         "{err}"
     );
+}
+
+#[test]
+fn partial_policy_json_stays_fail_closed() {
+    // Regression guard: a policy JSON that omits fields must inherit the SAFE
+    // defaults (container-level serde default), not the field-type defaults
+    // (which would be an ambient-trust fail-open).
+    let policy: RegistryPolicy =
+        serde_json::from_str("{}").expect("deserialize empty policy object");
+    assert!(
+        policy.require_signature,
+        "missing require_signature must default to true, not false"
+    );
+    assert_eq!(policy.max_risk, Some(RiskClass::High));
+    assert_eq!(policy.require_sandbox_at_or_above, Some(RiskClass::High));
+
+    // An unsigned tool is refused by a registry built from that empty policy.
+    let mut reg = ToolRegistry::new(policy);
+    let mut tool = signed_tool("x", "1.0.0", RiskClass::Low, false);
+    tool.signature = None;
+    let err = reg
+        .register(tool)
+        .expect_err("empty-policy registry must still require a signature");
+    assert!(
+        matches!(err, RegistryError::MissingSignature { .. }),
+        "{err}"
+    );
+}
+
+#[test]
+fn full_registry_json_roundtrips_via_empty_policy_safely() {
+    // A registry deserialized with `"policy": {}` must be fail-closed, matching
+    // the container-default behavior above end to end.
+    let json = r#"{"policy":{},"tools":{},"pins":{},"workspace_allowlists":{},"events":[]}"#;
+    let reg: ToolRegistry = serde_json::from_str(json).expect("deserialize registry");
+    assert!(reg.policy().require_signature);
+    assert_eq!(reg.policy().max_risk, Some(RiskClass::High));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use beater_os_core::{HashValue, RiskClass, ToolManifest, hash_json};
+use beater_os_core::{BeaterOsResult, HashValue, RiskClass, ToolManifest, hash_json};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -79,22 +79,26 @@ pub struct ToolPin {
 }
 
 /// Registry admission policy. Distrust-by-default (`final.md` §13.6).
+///
+/// The `#[serde(default)]` is deliberately on the **container**, not the fields:
+/// any field missing from a policy JSON inherits the safe [`Default`] below
+/// (signatures required, risk capped at `High`, sandbox floor `High`), rather
+/// than the field type's own default (which would be `false`/`None` — an
+/// ambient-trust fail-open). A partially specified or forward-migrated policy
+/// therefore stays fail-closed; disabling a control must be an explicit,
+/// auditable value (e.g. `"require_signature": false`, `"max_risk": null`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RegistryPolicy {
     /// Publishers whose signatures the registry will trust.
-    #[serde(default)]
     pub trusted_publishers: BTreeSet<String>,
     /// Every tool must carry a signature from a trusted publisher.
-    #[serde(default)]
     pub require_signature: bool,
     /// A tool resolves only if its tests are passing.
-    #[serde(default)]
     pub require_passing_tests: bool,
     /// No tool above this risk class may be registered or resolved.
-    #[serde(default)]
     pub max_risk: Option<RiskClass>,
     /// Tools at or above this risk class must declare `sandbox_required` (§13.8).
-    #[serde(default)]
     pub require_sandbox_at_or_above: Option<RiskClass>,
 }
 
@@ -334,6 +338,11 @@ impl ToolRegistry {
     /// registered tool only if it is registered, pin-conformant, trusted,
     /// digest-consistent, signed (if required), tested (if required), within the
     /// risk ceiling, sandboxed (if required), and workspace-allowed.
+    ///
+    /// Scoping note: a request with `workspace_id: None` is **not**
+    /// workspace-scoped and skips the per-workspace allowlist. Callers that
+    /// require scoping (e.g. the tool gateway) must always supply a workspace;
+    /// omitting it yields the unrestricted global view of registered tools.
     pub fn resolve(&self, request: &ResolveRequest) -> RegistryResult<&RegisteredTool> {
         let tool = self.get(&request.tool_id, &request.version)?;
 
@@ -447,6 +456,10 @@ impl ToolRegistry {
                     version: version.clone(),
                 });
             };
+            // Trust is anchored on the SIGNATURE's publisher, never
+            // `manifest.publisher`: the manifest is untrusted metadata and may
+            // name a different (or spoofed) publisher. Only the signer's
+            // identity — bound to the content digest below — is authoritative.
             if !self
                 .policy
                 .trusted_publishers
@@ -487,9 +500,11 @@ impl ToolRegistry {
 
 /// Compute the content digest of a tool's schema/artifact bytes, so callers and
 /// the registry agree on one digest function. Reuses the core SHA-256 hashing.
-pub fn content_digest(schema: &str) -> HashValue {
-    // `hash_json` over a string is infallible in practice (strings always
-    // serialize); fall back to an empty digest sentinel only if it somehow
-    // fails, which callers can still detect as a mismatch.
-    hash_json(&schema).unwrap_or_default()
+///
+/// The `Result` is surfaced rather than hidden behind an empty-string sentinel:
+/// a digest is a security value, and "hashing failed" must never quietly become
+/// a digest that could compare equal to another failure. (In practice hashing a
+/// string cannot fail.)
+pub fn content_digest(schema: &str) -> BeaterOsResult<HashValue> {
+    hash_json(&schema)
 }
