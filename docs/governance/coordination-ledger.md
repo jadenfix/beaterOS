@@ -43,6 +43,8 @@ Statuses: `draft-pr` → `in-review` → `changes-requested` → `approved` →
 | #26 | claude/multi-agent-pr-review-3emc88 | claude-subagent/reviewer | _pending (non-author)_ | in-review |
 | #24 | claude/qp5d8a | claude/goal-e2e-driver | claude/goal-e2e-driver | merged |
 | #40 | claude/design-hardlimits-bgnft1 | claude/goal-e2e-driver | claude/goal-e2e-driver | merged |
+| #57 | codex | claude-subagent/reviewer | claude/goal-mvp-driver | merged |
+| #55 | codex | claude-subagent/reviewer | claude/goal-mvp-driver | merged |
 
 ## Review log (agent-layer approvals)
 
@@ -53,6 +55,9 @@ Statuses: `draft-pr` → `in-review` → `changes-requested` → `approved` →
 | 2026-07-03 | #26 | claude-subagent/reviewer | COMMENT (agent-layer) | Adversarial DPR: 5 non-blocking findings, all fixed (incl. 2 real validator bugs: calendar-invalid timestamps and trailing-newline digests). PR then reconciled — dropped duplicate contract/governance content now covered by merged #25/#23; narrowed to the additive final.md integrity guard only. |
 | 2026-07-04 | #24 | claude/goal-e2e-driver | APPROVE (agent-layer) | Non-author DPR: docs-only, additive (glossary + open-questions, §19). Verified all internal links resolve on main; terms grounded in final.md. Merged as non-author. |
 | 2026-07-04 | #40 | claude/goal-e2e-driver | APPROVE (agent-layer) | Non-author DPR: two additive design specs (budget/runaway §15, metrics-as-gates §14). Verified factual anchors against merged beater-os-core (SessionStatus, scenario schema, scenarios/security). Fail-closed budget ceilings + journal-derived metrics are sound. Merged as non-author. |
+| 2026-07-04 | #57 | claude-subagent/reviewer | APPROVE (agent-layer) | Non-author DPR: `scripts/local-e2e.py` CI-mirror aggregator. Verified all 12 gates PASS locally on macOS/Apple Silicon; fail-loud (no `|| true`, exit 1 on any gate), minimal (2 new files). 4 non-blocking nits: missing-binary traceback, hardcoded `origin/main`, duplicated plan-assertion test, PR-body gate-count drift. Merged (non-author). |
+| 2026-07-04 | #55 | claude-subagent/reviewer | APPROVE (agent-layer) | Non-author DPR: ModelPolicy fail-closed default (#43). Traced all four construction paths (Default/serde-default/AgentSession-absent/partial) → `Some(Internal)`; serde-default trap avoided (hand `Default` mirrors field defaults); 5 regression tests. No residual fail-open — only explicit JSON `null` opts out (auditable). Merged (non-author). |
+| 2026-07-04 | #27 | claude-subagent/reviewer | APPROVE (agent-layer) | Non-author DPR: `beater-os-audit` independent verifier + trace viewer (slice A1). 13 tests incl. 7 negative (tampered-hash, grant-before-issue, unknown-session, unexplained-denial, revoked/expired grant); imports core contracts (no schema drift). Follow-ups filed: overstated tamper-evidence comment (`verify.rs:143-147`, bounded by core's unsigned chain); add seq-gap negative test; `metrics`/`bundle` mild scope creep but tested+wired. Merged by peer (non-author). |
 
 ## Open coordination questions
 
