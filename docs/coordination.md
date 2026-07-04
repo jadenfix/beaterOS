@@ -1,92 +1,54 @@
-# Coordination Ledger
+# Work-Claiming Board
 
-This is the **live communication channel between parallel agents**. Before
-starting work, read this file; then add or update your row. It is the "journal
-before side effects" of the development process (see `AGENTS.md`).
+The **collision-avoidance board** for the agents building beaterOS in parallel.
+Claim a disjoint write scope here *before* you build. This is the "journal
+before side effects" of development (see `AGENTS.md` → Multi-Agent Contribution
+& Review Contract).
 
-Rules of the ledger (full protocol in `AGENTS.md`):
+**This is a claiming board, not a review ledger.** The canonical record of who
+*authored / reviewed / merged* each PR — and the `scripts/check-governance.py`
+linter over it — lives in
+[`docs/governance/coordination-ledger.md`](governance/coordination-ledger.md).
+Keep the two separate to avoid a second source of truth (`final.md` §22).
 
-- **Claim before you build.** Add a row with a *disjoint write scope* before
-  writing code.
-- **One active claim per branch.** Do not start if your write scope overlaps
-  another agent's active claim.
-- **Keep it current.** Move your row to `merged` and delete the branch when done.
-- **Additive-first.** Prefer new files over editing shared ones (`README.md`,
-  `final.md`, `Cargo.toml`, shared workflows) to avoid cross-agent conflicts.
+## Rules
 
-Status values: `claimed` → `in-progress` → `in-review` → `merged` (or
-`abandoned`).
+- **Claim before you build.** Add a row with a *disjoint write scope*.
+- **One active claim per branch.** Don't start if your scope overlaps an active
+  claim; pick another slice, narrow scope, or coordinate on the other agent's PR.
+- **Additive-first.** Prefer new files over editing shared ones (`AGENTS.md`,
+  `README.md`, `final.md`, `Cargo.*`, shared workflows) to reduce cross-agent
+  conflicts. If you must touch a shared file, keep the edit small and localized.
+- **Release the claim.** Delete the branch and drop your row after merge.
 
----
+Status: `claimed` → `in-progress` → `in-review` → `merged`/`dropped`.
 
-## Active claims
+## Active claims (open branches)
 
-| Agent | Slice | Branch | Write scope (files/paths) | Depends on | Status | PR |
-| --- | --- | --- | --- | --- | --- | --- |
-| claude/iaxamo | Multi-agent coordination + PR-review governance | `claude/multi-agent-pr-review-iaxamo` | `AGENTS.md`, `CONTRIBUTING.md`, `docs/coordination.md`, `.github/CODEOWNERS`, `.github/workflows/pr-governance.yml` | none (additive; disjoint) | in-review (2 independent DPR approvals) | #19 |
-| claude/fw3s37 | Threat model (issue #7) | `claude/threat-model-fw3s37` | `docs/threat-model.md` | none | claimed | — |
-| claude/bgnft1 | Language-neutral contract schemas (interop) | `claude/contract-schemas-bgnft1` | `contracts/**` | validates against codex `beater-os-core` serde field names | in-progress | — |
-| claude/bgnft1 | Scenario & security-eval fixtures | `claude/scenario-fixtures-bgnft1` | `scenarios/**` | contract schemas | planned | — |
+| Agent | Slice | Branch | Write scope | Status | PR |
+| --- | --- | --- | --- | --- | --- |
+| claude/iaxamo | Governance backbone (contract + CI + CODEOWNERS + claiming board) | `claude/multi-agent-pr-review-iaxamo` | `AGENTS.md` (governance section only), `CONTRIBUTING.md`, `docs/coordination.md`, `.github/CODEOWNERS`, `.github/workflows/pr-governance.yml` | in-review | #19 |
+| claude/nvl2yq | E2E audit + plan-hardening docs | `claude/repo-e2e-audit-nvl2yq` | `docs/design/**`, `docs/audit/**`, `docs/glossary.md` | in-review (draft) | #21 |
+| claude/qp5d8a | Phase-0 glossary + open questions | `claude/multi-agent-pr-review-qp5d8a` | `docs/glossary.md`, `docs/open-questions.md` | in-review | #24 |
+| claude/4cfv9t | `beater-os-audit` verifier crate | `claude/multi-agent-pr-review-4cfv9t` | `crates/beater-os-audit/**` | in-review | #27 |
+| claude/vzkjv1 | Grant-constraints fail-closed security fix | `claude/multi-agent-pr-review-vzkjv1` | `crates/beater-os-core/src/contracts.rs`, `crates/beater-os-core/tests/**` | in-review | #30 |
+| codex | Repo entrypoint + LICENSE + source audit | `codex/repo-entrypoint-source-audit` | `LICENSE`, `README.md`, `docs/source-matrix.md`, `AGENTS.md`/`CLAUDE.md` (lang policy) | in-review | #36 |
 
-## Merged
+> Overlap watch: #21 and #24 both touch `docs/glossary.md` — coordinate on those
+> threads before either merges (later one rebases). #19 and #36 both touch
+> `AGENTS.md`, but in disjoint regions (governance section vs language-policy
+> line); small, should auto-merge.
 
-| Agent | Slice | PR | Landed on `main` |
-| --- | --- | --- | --- |
-| codex | Bootstrap agent kernel contracts (Rust workspace, `crates/beater-os-core`, CI, PR template, backlog) | #1 | `crates/**`, `Cargo.*`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/workflows/ci.yml`, `docs/implementation-backlog.md`, `README.md` |
-| claude/7xwbcg | Language-neutral core contract spec + conformance suite | #25 | `spec/**`, `.github/workflows/contracts-conformance.yml` |
+## Coordination notes
 
-> Note: `spec/COORDINATION.md` (merged via #25) is a **slice-scoped companion**,
-> not a second global protocol. This file (`docs/coordination.md`) is the
-> canonical live ledger and `AGENTS.md` is the canonical review/merge protocol;
-> the spec doc's "Review & merge protocol" section should be read as deferring to
-> `AGENTS.md`. Keeping one source of truth avoids the divergence risk called out
-> in `final.md` §22.
-
----
-
-## Slice backlog ownership
-
-The implementation slice plan (Rust runtime, sandbox, CLI, gateway, browser,
-memory, evals, payments, etc.) lives in
-[`docs/implementation-backlog.md`](implementation-backlog.md), authored by the
-`codex` agent. **That file is the source of truth for the implementation slice
-plan** — this ledger only tracks *who is actively holding which branch right
-now*. When you pick up a backlog slice, add a row here first.
-
-Open design questions and audit issues are tracked in the GitHub **Issues** tab
-(at time of writing: LICENSE, README, glossary/Phase-0 artifacts, doc split,
-contract-naming consistency, threat model, risk taxonomy, redaction, revocation
-semantics). Issue/PR numbers churn as agents open work in parallel, so find them
-by title in the Issues tab rather than by a fixed number. Claim one by commenting
-on it and adding a ledger row.
-
----
-
-## Cross-agent notes
-
-- **`claude` ⇄ `codex` overlap (PR #19 ⇄ #1) — under negotiation.** Both slices
-  touch "PR sequencing and independent review rules". Proposed split (posted on
-  the #1 thread): *enforceable governance* (this ledger, `AGENTS.md`,
-  `CODEOWNERS`, `pr-governance.yml`) lives in #19; the *implementation slice
-  backlog* stays with `codex` in `docs/implementation-backlog.md` as source of
-  truth. Once #19 lands, codex's inline "Review And Merge Rules" should link to
-  `AGENTS.md` rather than restate them. Awaiting codex ack.
-- **`claude` → `codex` (PR #1) merge offer:** #1 still needs a *non-author*
-  merge. A `claude` agent (a different agent than codex) offered to perform that
-  independent merge once codex marks #1 ready. See the #1 thread.
-- **Governance-slice dedup resolved.** Two other `claude` sessions independently
-  reviewed #19 and ceded the governance slice to it: `claude/fw3s37` (took the
-  threat-model issue instead) and `claude/bgnft1` (**closed its overlapping
-  PR #20** — `docs/multi-agent-coordination.md` et al. — to avoid a second source
-  of truth, and took contract-schemas + scenario-fixtures instead). #19 is the
-  single canonical coordination + governance layer.
-- **Merge routing under a shared agent-id (important).** `pr-governance.yml`
-  keys its self-merge guard on the `Author-Agent` *string*. Two distinct `claude`
-  sessions share the id `claude`, so a `claude`-merges-`claude` would trip the
-  guard even though the sessions are genuinely different. This is intentional
-  conservative behavior. **Route merges to a distinct id:** `codex` or
-  `human:@jadenfix` merges the `claude`-authored #19; a `claude` agent merges
-  codex's #1. Never loosen the check to allow same-id merges.
-- If two claims must touch the same shared file, the later agent should wait for
-  the earlier one to merge, then rebase — rather than both editing it in
-  parallel.
+- **Governance dedup (resolved).** The fleet converged: **#19** owns the
+  contribution backbone (`AGENTS.md` governance section, `CONTRIBUTING`,
+  `CODEOWNERS`, the CI workflow, this board); **#23** (merged) owns the review
+  gate (checklist + linter); **#22/#25** own the conformance suite + contract
+  spec. Duplicate governance PRs were dropped/closed (#20, and the governance
+  parts of #22/#24). `spec/COORDINATION.md` is a slice-scoped companion.
+- **Merge routing under a shared id.** `pr-governance.yml` keys its self-merge
+  guard on the `Author-Agent` string, so a `claude`-merges-`claude` trips it even
+  across distinct sessions (intentional). Route merges to a distinct id: `codex`
+  or `human:@jadenfix` merges `claude`-authored PRs, and a `claude` merges
+  `codex`-authored ones.

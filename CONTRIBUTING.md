@@ -1,52 +1,62 @@
 # Contributing to beaterOS
 
-beaterOS is developed by **multiple agents working in parallel** alongside human
+beaterOS is built by **multiple agents working in parallel** alongside human
 contributors. To keep that safe and collision-free, everyone — human or agent —
 follows one shared contract.
 
 ## Start here
 
-1. **Read [`AGENTS.md`](AGENTS.md)** — the canonical contribution and review
-   contract. It defines how work is claimed, reviewed, and merged.
-2. **Read [`docs/coordination.md`](docs/coordination.md)** — the live ledger of
-   who is working on what. Claim your slice there *before* you start.
+1. **Read [`AGENTS.md`](AGENTS.md) → "Multi-Agent Contribution & Review
+   Contract".** It is the canonical process: claiming work, independent review,
+   no self-merge, shared ownership, and the honesty boundary on attested agent
+   identity.
+2. **Claim a disjoint write scope in [`docs/coordination.md`](docs/coordination.md)**
+   (the work-claiming board) *before* you start, so you don't collide with
+   another agent.
 3. **Read the relevant section of [`final.md`](final.md)** — the design your
-   change implements. Do not shorten or weaken `final.md`.
+   change implements. Never shorten or weaken `final.md`.
 
 ## The non-negotiable rules
 
 - **No self-merge.** The agent/person who authored a PR never merges it. A
-  *different* party reviews, and a party who is *not the author* merges. See
-  `AGENTS.md` §3.
-- **Independent review is required.** Every PR gets a deep review (DPR) from
-  someone who did not write it, with an explicit verdict.
-- **Shared ownership.** Every reviewer has full authority over the whole tree —
-  no file is owned only by its author. Write code any reviewer can understand
-  and change.
-- **Claim before you build.** Register a disjoint write scope in the ledger to
-  avoid colliding with other agents.
-- **Policy outside the actor.** Merge rules are also enforced by CI
-  (`.github/workflows/pr-governance.yml`) and `.github/CODEOWNERS`, not by good
-  intentions alone.
+  *different* party reviews, and a party who is *not the author* merges.
+- **Independent review is required.** Every PR gets a deep review (DPR) from a
+  non-author, recorded in [`docs/governance/`](docs/governance/) — the review
+  gate (checklist + linter).
+- **Shared ownership.** Every reviewer has full authority over the whole tree
+  (`.github/CODEOWNERS`). Write code any reviewer can understand and change.
+- **Claim before you build.** Register a disjoint write scope to avoid colliding
+  with other agents.
+- **Policy outside the actor.** The rules are also enforced by CI
+  (`.github/workflows/pr-governance.yml`) and the ledger linter
+  (`scripts/check-governance.py`), not by good intentions alone.
 
 ## Opening a PR
 
 - Branch as `<agent-id>/<slice>` (e.g. `claude/multi-agent-pr-review`).
-- Use the PR template and fill in the **Agent routing trailer** truthfully
-  (`Author-Agent`, `Reviewer-Agent`, `Merged-By`).
+- Use the PR template and fill in the **agent routing trailer** truthfully
+  (`Author-Agent`, `Reviewer-Agent`, `Merged-By`). `Merged-By` must differ from
+  `Author-Agent`.
 - Keep the change small and contract-focused; link the `final.md` section(s).
-- For Rust changes, run `cargo fmt --check`, `cargo test --workspace`, and
-  `cargo clippy --workspace --all-targets` locally.
+- For Rust changes run `cargo fmt --check`, `cargo test --workspace`, and
+  `cargo clippy --workspace --all-targets`.
 
-## Filing issues and design questions
+## Recording review & merge
 
-Open a GitHub issue for design gaps or audit findings. The `final.md` §20 open
-questions are good candidates to turn into tracked issues.
+- A non-author reviewer fills the checklist in
+  [`docs/governance/review-checklist.md`](docs/governance/review-checklist.md)
+  and leaves a COMMENT review with an explicit verdict (GitHub blocks a formal
+  Approve on your own account).
+- The completed merge is recorded in
+  [`docs/governance/coordination-ledger.md`](docs/governance/coordination-ledger.md)
+  — the canonical review/merge audit ledger — through a follow-up PR, not a
+  direct push to `main`. `python3 scripts/check-governance.py` must stay green.
 
 ## Trust model, honestly
 
 All agents currently act as the same GitHub account, so GitHub cannot tell one
 agent from another. Agent identity is **attested**, and the rules above are
-enforced by convention + CI structural checks, not cryptographically. See
-`AGENTS.md` §7 for the full honesty boundary and the upgrade path (per-agent
-signing identities, `final.md` §7.1).
+enforced by convention + CI structural checks + the linter, not
+cryptographically. See the honesty boundary in `AGENTS.md`. The real gate is
+branch protection on `main`; per-agent signing identities (`final.md` §7.1)
+would make it verifiable.

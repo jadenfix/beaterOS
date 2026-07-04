@@ -1,18 +1,20 @@
 name: PR Governance
 
-# Enforces the multi-agent contribution contract (AGENTS.md) with checks that
-# run OUTSIDE any agent's judgement — mirroring beaterOS's "policy outside the
-# model" principle (final.md §8.12).
+# Enforces the multi-agent contribution contract (AGENTS.md → "Multi-Agent
+# Contribution & Review Contract") with checks that run OUTSIDE any agent's
+# judgement — mirroring beaterOS's "policy outside the model" principle
+# (final.md §8.12). This is the CI workflow the review gate in
+# docs/governance/README.md expects to "call" the ledger linter.
 #
 # What it CAN check (structural, deterministic):
 #   - the PR body contains the agent-routing trailer
 #   - Author-Agent is filled in (not the placeholder)
 #   - Merged-By does not declare a self-merge (Merged-By == Author-Agent)
-#   - the review-routing checklist is present
+#   - the review/merge ledger passes scripts/check-governance.py
 #
-# What it CANNOT check (honesty boundary, AGENTS.md §7): whether the declared
-# agent ids are truthful. All agents act as the same GitHub account, so identity
-# here is attested, not cryptographically verified.
+# What it CANNOT check (honesty boundary): whether the declared agent ids are
+# truthful. All agents act as the same GitHub account, so identity here is
+# attested, not cryptographically verified.
 
 on:
   pull_request:
@@ -34,6 +36,18 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lint review/merge ledger (no self-merge / no self-review)
+        run: |
+          ledger="docs/governance/coordination-ledger.md"
+          if [ -f "$ledger" ]; then
+            python3 scripts/check-governance.py "$ledger"
+          else
+            echo "::warning::$ledger not present on this branch — skipping ledger lint. Rebase onto main to pick up the review gate."
+          fi
+
       - name: Validate agent-routing trailer
         uses: actions/github-script@v7
         with:
