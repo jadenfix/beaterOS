@@ -158,6 +158,7 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         issuer: projection.session.created_by.clone(),
         holder: projection.session.agent_id.clone(),
         session_id: session_id.clone(),
+        parent_grant_id: None,
         scope: CapabilityScope {
             selector: CapabilitySelector {
                 resource_kind,
@@ -303,6 +304,8 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         grants: projection.active_grants(now),
         approvals: Vec::new(),
         simulations: Vec::new(),
+        mandates: Vec::new(),
+        revoked_handles: std::collections::BTreeSet::new(),
     };
     // `admit` is fallible because it digests the manifest; propagate any
     // hashing error rather than pretending a decision was reached.
