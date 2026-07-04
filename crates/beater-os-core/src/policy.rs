@@ -5,7 +5,8 @@ use uuid::Uuid;
 
 use crate::contracts::{
     ActionKind, ActionManifest, ApprovalEvidence, ApprovalMode, CapabilityGrant, DataClass,
-    DecisionResult, PolicyDecision, RiskClass, SideEffectClass, SimulationEvidence, TaintLabel,
+    DecisionResult, PaymentMandate, PolicyDecision, RiskClass, SideEffectClass, SimulationEvidence,
+    TaintLabel,
 };
 use crate::error::BeaterOsResult;
 use crate::hash::HashValue;
@@ -19,6 +20,11 @@ pub struct AdmissionContext {
     pub grants: Vec<CapabilityGrant>,
     pub approvals: Vec<ApprovalEvidence>,
     pub simulations: Vec<SimulationEvidence>,
+    /// Economic-authority objects available to this action (issue #73;
+    /// `final.md` §12.7 "no payment without a mandate"). A payment action is
+    /// admitted only if one of these mandates covers it. Grants authorize the
+    /// *act* of spending; a mandate authorizes the *money*.
+    pub mandates: Vec<PaymentMandate>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -104,6 +110,23 @@ impl PolicyEngine {
                 "payment side effects must use the spend action kind",
                 DecisionFollowup::none(),
             ));
+        }
+
+        if is_payment_action(manifest)
+            && let Err(reason) = payment_authorized_by_mandate(manifest, ctx)
+        {
+            return Ok(decision(
+                manifest,
+                manifest_hash,
+                ctx,
+                DecisionResult::Denied,
+                matched_rules,
+                reason,
+                DecisionFollowup::none(),
+            ));
+        }
+        if is_payment_action(manifest) {
+            matched_rules.push("payment_authorized_by_mandate".to_string());
         }
 
         let matching_grants: Vec<&CapabilityGrant> = ctx
@@ -266,6 +289,52 @@ pub fn derived_risk_floor(
     }
 
     floor
+}
+
+/// An action moves money if it declares a payment side effect or uses the spend
+/// verb. Both are treated as payments so a spend cannot dodge mandate review by
+/// omitting the `Payment` side-effect label (the same anti-laundering stance as
+/// issues #46 and #8).
+fn is_payment_action(manifest: &ActionManifest) -> bool {
+    manifest
+        .expected_side_effects
+        .contains(&SideEffectClass::Payment)
+        || manifest.action_kind == ActionKind::Spend
+}
+
+/// Enforce `final.md` §12.7 "no payment without a mandate" (issue #73). Grants
+/// authorize the act of spending; a `PaymentMandate` authorizes the money. A
+/// payment is admitted only if a mandate, bound to this session and holder and
+/// still active, covers the declared amount. The amount must be declared — a
+/// payment that does not state how much it moves cannot be bounded, so it fails
+/// closed ("no silent mandate expansion").
+///
+/// This slice binds the axes the current contracts express unambiguously:
+/// presence, session/holder binding, expiry, and the amount ceiling.
+/// Counterparty, asset, and purpose binding need manifest fields that do not yet
+/// exist and are a documented follow-up (see docs/design/payment-mandate-admission.md).
+fn payment_authorized_by_mandate(
+    manifest: &ActionManifest,
+    ctx: &AdmissionContext,
+) -> Result<(), &'static str> {
+    let Some(amount) = manifest.requested_budget.max_payment_minor_units else {
+        return Err(
+            "payment action must declare its amount in requested_budget.max_payment_minor_units",
+        );
+    };
+    let covered = ctx.mandates.iter().any(|mandate| {
+        mandate.session_id == ctx.session_id
+            && mandate.holder == ctx.actor_id
+            && mandate.expires_at > ctx.now
+            && amount <= mandate.max_minor_units
+    });
+    if covered {
+        Ok(())
+    } else {
+        Err(
+            "payment requires an active PaymentMandate covering the amount for this session and holder",
+        )
+    }
 }
 
 fn dangerous_untrusted_instruction(manifest: &ActionManifest) -> bool {
