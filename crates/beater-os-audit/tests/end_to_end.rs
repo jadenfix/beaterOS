@@ -181,7 +181,7 @@ fn valid_trace_passes_every_independent_check() -> Result<(), BeaterOsError> {
         report.failures().collect::<Vec<_>>()
     );
     assert_eq!(report.records, 5);
-    assert_eq!(report.checks.len(), 7);
+    assert_eq!(report.checks.len(), 8);
     assert_eq!(report.failures().count(), 0);
     Ok(())
 }
@@ -318,5 +318,61 @@ fn detects_tampered_record_hash() -> Result<(), BeaterOsError> {
     let failed: BTreeSet<&str> = report.failures().map(|c| c.check.as_str()).collect();
     assert!(failed.contains("cryptographic_chain"));
     assert!(failed.contains("hash_linkage"));
+    Ok(())
+}
+
+#[test]
+fn detects_use_of_revoked_grant() -> Result<(), BeaterOsError> {
+    // A grant is issued already revoked, then an action uses it. The core journal
+    // verifier does not re-check grant validity; the audit's grant_validity must.
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session("S1"),
+        },
+        ts(1_000),
+    )?;
+    let mut g = grant("G1", "S1", "agent:coder");
+    g.revoked = true;
+    journal.append(JournalEvent::CapabilityGranted { grant: g }, ts(1_001))?;
+    journal.append(
+        JournalEvent::ActionProposed {
+            manifest: manifest("A1", "S1", "tool:fs", &["G1"]),
+        },
+        ts(1_002),
+    )?;
+    let snapshot = journal.snapshot();
+    let report = verify_snapshot(&snapshot);
+    assert!(!report.ok);
+    let failed: BTreeSet<&str> = report.failures().map(|c| c.check.as_str()).collect();
+    assert!(failed.contains("grant_validity"));
+    assert!(!failed.contains("cryptographic_chain"));
+    Ok(())
+}
+
+#[test]
+fn detects_use_of_expired_grant() -> Result<(), BeaterOsError> {
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session("S1"),
+        },
+        ts(1_000),
+    )?;
+    let mut g = grant("G1", "S1", "agent:coder");
+    g.expires_at = ts(1_001); // expires before the action at ts(1_002) uses it
+    journal.append(JournalEvent::CapabilityGranted { grant: g }, ts(1_000))?;
+    journal.append(
+        JournalEvent::ActionProposed {
+            manifest: manifest("A1", "S1", "tool:fs", &["G1"]),
+        },
+        ts(1_002),
+    )?;
+    let snapshot = journal.snapshot();
+    let report = verify_snapshot(&snapshot);
+    assert!(!report.ok);
+    let failed: BTreeSet<&str> = report.failures().map(|c| c.check.as_str()).collect();
+    assert!(failed.contains("grant_validity"));
+    assert!(!failed.contains("cryptographic_chain"));
     Ok(())
 }

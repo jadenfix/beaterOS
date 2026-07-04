@@ -8,9 +8,11 @@
 //! do not share state with the core verifier. If the two disagree, that
 //! disagreement is itself an auditable incident.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use beater_os_core::{DecisionResult, InMemoryJournal, JournalEvent, JournalSnapshot};
+use beater_os_core::{
+    CapabilityGrant, DecisionResult, InMemoryJournal, JournalEvent, JournalSnapshot,
+};
 use serde::Serialize;
 
 /// Expected genesis linkage hash.
@@ -76,12 +78,20 @@ impl AuditReport {
 /// that cannot positively confirm an invariant reports `Fail`.
 pub fn verify_snapshot(snapshot: &JournalSnapshot) -> AuditReport {
     let checks = vec![
+        // Delegated content-hash integrity — the ONLY signal here that recomputes
+        // record hashes. Every other check trusts `record.hash` as given, so a
+        // fully re-hashed tamper is caught only by this one.
         check_cryptographic_chain(snapshot),
+        // Independent second implementations of structural invariants. The overlap
+        // with `beater-os-core` is intentional (defense in depth): they catch a
+        // core regression, not a gap in core.
         check_sequence_contiguous(snapshot),
         check_hash_linkage(snapshot),
+        check_receipt_causality(snapshot),
+        // Novel gap-fillers — invariants the core journal verifier does NOT check.
         check_referential_sessions(snapshot),
         check_grant_references(snapshot),
-        check_receipt_causality(snapshot),
+        check_grant_validity(snapshot),
         check_denial_explained(snapshot),
     ];
     let ok = checks.iter().all(|c| c.outcome == CheckOutcome::Pass);
@@ -92,9 +102,10 @@ pub fn verify_snapshot(snapshot: &JournalSnapshot) -> AuditReport {
     }
 }
 
-/// Delegate the cryptographic hash-chain check to the core verifier. This is
-/// one of two independent signals: the core recomputes content hashes; the
-/// structural checks below re-derive linkage without the core's private view.
+/// Delegate the cryptographic hash-chain check to the core verifier. This is the
+/// only signal in this module that recomputes record content hashes; the
+/// structural checks below re-derive linkage/causality but trust `record.hash`
+/// as given. Content-hash integrity therefore rests on this delegated check.
 fn check_cryptographic_chain(snapshot: &JournalSnapshot) -> CheckResult {
     let journal = InMemoryJournal::from_records(snapshot.records.clone());
     match journal.verify_chain() {
@@ -129,9 +140,11 @@ fn check_sequence_contiguous(snapshot: &JournalSnapshot) -> CheckResult {
 /// Every record must link to its predecessor (genesis for the first) and
 /// carry a non-empty content hash.
 ///
-/// This overlaps `beater-os-core`'s chain check on purpose: it is an
-/// independent second implementation (defense in depth). Do not "simplify" it
-/// away as redundant — if the two ever disagree, that is an auditable incident.
+/// This checks prev-hash *linkage*, not content-hash *integrity*: a chain that
+/// was consistently re-hashed after tampering would pass here and be caught only
+/// by [`check_cryptographic_chain`]. The overlap with `beater-os-core` is a
+/// deliberate independent second implementation (defense in depth) — do not
+/// "simplify" it away; if the two ever disagree, that is an auditable incident.
 fn check_hash_linkage(snapshot: &JournalSnapshot) -> CheckResult {
     let mut prev_hash = GENESIS_HASH.to_string();
     for record in &snapshot.records {
@@ -224,8 +237,65 @@ fn check_grant_references(snapshot: &JournalSnapshot) -> CheckResult {
     )
 }
 
+/// A grant named by an action must be neither revoked nor expired at the moment
+/// the action is proposed. `final.md` §26 lists revocation as a never-compromise
+/// invariant: the core admission path enforces `is_active_at` live, but the
+/// offline journal verifier does not re-check it, so an audit would otherwise
+/// miss a use-after-revoke or use-after-expiry trace. This re-derives it.
+///
+/// The journal has no explicit revocation event today, so this reads the
+/// `revoked` flag and `expires_at` recorded on the grant at issuance. If a
+/// revocation event type is added later, this check should also honor it.
+fn check_grant_validity(snapshot: &JournalSnapshot) -> CheckResult {
+    let mut grants: BTreeMap<&str, &CapabilityGrant> = BTreeMap::new();
+    for record in &snapshot.records {
+        match &record.event {
+            JournalEvent::CapabilityGranted { grant } => {
+                grants.insert(grant.grant_id.as_str(), grant);
+            }
+            JournalEvent::ActionProposed { manifest } => {
+                for required in &manifest.required_grants {
+                    // Existence is `grant_references`' job; do not double-report.
+                    let Some(grant) = grants.get(required.as_str()) else {
+                        continue;
+                    };
+                    if grant.revoked {
+                        return CheckResult::fail(
+                            "grant_validity",
+                            format!(
+                                "action {} uses revoked grant {required}",
+                                manifest.action_id
+                            ),
+                        );
+                    }
+                    if grant.expires_at <= record.created_at {
+                        return CheckResult::fail(
+                            "grant_validity",
+                            format!(
+                                "action {} at {} uses grant {required} that expired at {}",
+                                manifest.action_id,
+                                record.created_at.to_rfc3339(),
+                                grant.expires_at.to_rfc3339()
+                            ),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    CheckResult::pass(
+        "grant_validity",
+        "every required grant is unrevoked and unexpired at use",
+    )
+}
+
 /// A receipt may only exist for an action that was proposed and then allowed by
-/// a policy decision earlier in the journal (independent of the core check).
+/// a policy decision earlier in the journal.
+///
+/// Unlike the gap-fillers, `beater-os-core`'s journal verifier already enforces
+/// this invariant, so this is a redundant second implementation (defense in
+/// depth), not a check that catches something core misses.
 fn check_receipt_causality(snapshot: &JournalSnapshot) -> CheckResult {
     let mut proposed: BTreeSet<&str> = BTreeSet::new();
     let mut allowed: BTreeSet<&str> = BTreeSet::new();
@@ -304,7 +374,7 @@ mod tests {
         let report = verify_snapshot(&snapshot);
         assert_eq!(report.records, 0);
         assert!(report.ok, "empty journal should pass: {:?}", report.checks);
-        assert_eq!(report.checks.len(), 7);
+        assert_eq!(report.checks.len(), 8);
         assert_eq!(report.failures().count(), 0);
     }
 }

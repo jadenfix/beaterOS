@@ -72,6 +72,9 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
             for check in &report.checks {
                 println!("[{:?}] {} — {}", check.outcome, check.check, check.detail);
             }
+            if report.records == 0 {
+                println!("note: journal is empty — this attests nothing about a real run");
+            }
             if report.ok {
                 println!("OK: {} record(s) passed all audit checks", report.records);
                 Ok(ExitCode::SUCCESS)

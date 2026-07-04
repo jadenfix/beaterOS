@@ -10,11 +10,17 @@ the same code path that *produced* it. It re-derives the audit invariants from
 ## Scope (this slice)
 
 - **Independent verification** (`verify_snapshot`) — a second implementation of
-  the journal audit invariants. It delegates the cryptographic hash-chain check
-  to `beater-os-core` as one signal, then adds its own structural and
-  cross-referential checks (sequence contiguity, hash linkage, session
-  referential integrity, grant-before-use, receipt causality, denial
-  explainability). Fails closed. Maps to `final.md` §8.15, §13.11, §22.9, §26.
+  the journal audit invariants, in three families:
+  - *Delegated content-hash integrity*: `cryptographic_chain` (the only signal
+    that recomputes record hashes).
+  - *Defense-in-depth second implementations* (intentionally overlap the core
+    verifier): `sequence_contiguous`, `hash_linkage` (prev-hash linkage, not
+    content), `receipt_causality`.
+  - *Novel gap-fillers* (invariants the core journal verifier does **not**
+    check): `referential_sessions`, `grant_references`, `grant_validity`
+    (unrevoked + unexpired at use, `final.md` §26), `denial_explained` (§22.9).
+
+  Fails closed. Maps to `final.md` §8.15, §13.11, §22.9, §26.
 - **Trace rendering** (`render_trace`) — a legible, deterministic timeline of a
   session (`final.md` §25 step 9, §17.4).
 - **Audit metrics** (`compute_metrics`) — exact coverage ratios for reviewers:
