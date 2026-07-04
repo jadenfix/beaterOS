@@ -84,21 +84,29 @@ impl Store {
         &self.root
     }
 
-    fn session_dir(&self, session_id: &str) -> PathBuf {
-        self.root.join(SESSIONS_DIR).join(session_id)
+    /// Resolve a session's directory, rejecting any id that is not a single safe
+    /// path segment. Session ids are attacker-controlled (`--session <id>` on
+    /// every command), so this is the chokepoint that prevents path traversal:
+    /// `--session ../../pwned` must never escape the store root.
+    fn session_dir(&self, session_id: &str) -> CliResult<PathBuf> {
+        validate_session_id(session_id)?;
+        Ok(self.root.join(SESSIONS_DIR).join(session_id))
     }
 
-    fn journal_path(&self, session_id: &str) -> PathBuf {
-        self.session_dir(session_id).join(JOURNAL_FILE)
+    fn journal_path(&self, session_id: &str) -> CliResult<PathBuf> {
+        Ok(self.session_dir(session_id)?.join(JOURNAL_FILE))
     }
 
-    fn receipts_path(&self, session_id: &str) -> PathBuf {
-        self.session_dir(session_id).join(RECEIPTS_FILE)
+    fn receipts_path(&self, session_id: &str) -> CliResult<PathBuf> {
+        Ok(self.session_dir(session_id)?.join(RECEIPTS_FILE))
     }
 
-    /// Whether a session with `session_id` exists on disk.
+    /// Whether a session with `session_id` exists on disk. An invalid id is not a
+    /// session, so it reports `false` rather than erroring.
     pub fn session_exists(&self, session_id: &str) -> bool {
-        self.journal_path(session_id).is_file()
+        self.journal_path(session_id)
+            .map(|path| path.is_file())
+            .unwrap_or(false)
     }
 
     /// List all session ids in the store, sorted.
@@ -125,10 +133,10 @@ impl Store {
         if self.session_exists(&session.session_id) {
             return Err(CliError::SessionExists(session.session_id.clone()));
         }
-        fs::create_dir_all(self.session_dir(&session.session_id))?;
+        fs::create_dir_all(self.session_dir(&session.session_id)?)?;
         // Create the logs up front so appends and loads have a stable target.
-        File::create(self.journal_path(&session.session_id))?;
-        File::create(self.receipts_path(&session.session_id))?;
+        File::create(self.journal_path(&session.session_id)?)?;
+        File::create(self.receipts_path(&session.session_id)?)?;
         self.append_event(
             &session.session_id,
             JournalEvent::SessionCreated {
@@ -140,7 +148,7 @@ impl Store {
 
     /// Load a session's journal into memory, reconstructing the hash chain.
     pub fn load_journal(&self, session_id: &str) -> CliResult<InMemoryJournal> {
-        let path = self.journal_path(session_id);
+        let path = self.journal_path(session_id)?;
         if !path.is_file() {
             return Err(CliError::SessionNotFound(session_id.to_string()));
         }
@@ -152,7 +160,13 @@ impl Store {
             }
             records.push(serde_json::from_str::<JournalRecord>(line)?);
         }
-        Ok(InMemoryJournal::from_records(records))
+        let journal = InMemoryJournal::from_records(records);
+        // Fail closed on any drift: re-verify the hash chain on every load so the
+        // admission path (and every read model) can never operate on tampered or
+        // corrupted journal state. This is the security boundary — a hand-edited
+        // journal.jsonl must be rejected here, not only under `journal verify`.
+        journal.verify_chain()?;
+        Ok(journal)
     }
 
     /// Append an event to a session's journal and persist it.
@@ -173,14 +187,14 @@ impl Store {
         let line = serde_json::to_string(&record)?;
         let mut file = OpenOptions::new()
             .append(true)
-            .open(self.journal_path(session_id))?;
+            .open(self.journal_path(session_id)?)?;
         writeln!(file, "{line}")?;
         Ok(record)
     }
 
     /// Load a session's receipt ledger.
     pub fn load_receipts(&self, session_id: &str) -> CliResult<ReceiptLedger> {
-        let path = self.receipts_path(session_id);
+        let path = self.receipts_path(session_id)?;
         if !path.is_file() {
             return Ok(ReceiptLedger::new());
         }
@@ -192,7 +206,10 @@ impl Store {
             }
             receipts.push(serde_json::from_str::<CapabilityReceipt>(line)?);
         }
-        Ok(ReceiptLedger::from_receipts(receipts))
+        let ledger = ReceiptLedger::from_receipts(receipts);
+        // Fail closed on receipt-chain drift, same rationale as `load_journal`.
+        ledger.verify_chain()?;
+        Ok(ledger)
     }
 
     /// Compute the next chained receipt for a session **without** writing it to
@@ -219,7 +236,7 @@ impl Store {
         let line = serde_json::to_string(receipt)?;
         let mut file = OpenOptions::new()
             .append(true)
-            .open(self.receipts_path(session_id))?;
+            .open(self.receipts_path(session_id)?)?;
         writeln!(file, "{line}")?;
         Ok(())
     }
@@ -258,5 +275,25 @@ impl Store {
             decisions,
             receipts,
         })
+    }
+}
+
+/// Reject any session id that is not a single safe path segment.
+///
+/// Session ids reach the store from `--session <id>` on every command, so an
+/// unsanitized id is a path-traversal primitive (`../../pwned` would let a
+/// command read or write outside the store root). We allow only ASCII
+/// alphanumerics, `-`, and `_` — which admits the generated UUIDs and any
+/// reasonable operator-chosen id — and reject everything else (path separators,
+/// `.`/`..`, whitespace, control bytes) fail-closed.
+fn validate_session_id(session_id: &str) -> CliResult<()> {
+    let is_safe = !session_id.is_empty()
+        && session_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if is_safe {
+        Ok(())
+    } else {
+        Err(CliError::invalid("session", session_id))
     }
 }

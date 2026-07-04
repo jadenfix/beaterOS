@@ -118,6 +118,9 @@ fn full_coding_workflow_end_to_end() {
             "file_path",
             "--target",
             "/workspace/repo/src/main.rs",
+            // Kernel-derived resolved target supplied by the mediation point.
+            "--resolved-target",
+            "/workspace/repo/src/main.rs",
             "--grants",
             &grant_id,
             "--action-id",
@@ -146,6 +149,10 @@ fn full_coding_workflow_end_to_end() {
             "--target-kind",
             "file_path",
             "--target",
+            "/etc/passwd",
+            // Even with a kernel-resolved target, a path OUTSIDE the granted
+            // prefix must be refused by the path constraint (not by the model).
+            "--resolved-target",
             "/etc/passwd",
             "--grants",
             &grant_id,
@@ -389,6 +396,12 @@ fn setup_admitted_write(session: &str) -> TempHome {
             "file_path",
             "--target",
             "/repo/a",
+            // `resolved_target` is kernel-derived (final.md §7.4): a mediation
+            // point supplies the canonical, symlink-resolved path. The CLI no
+            // longer infers it from the agent's claimed target, so a path-prefix
+            // grant only admits when a resolved target is provided here.
+            "--resolved-target",
+            "/repo/a",
             "--grants",
             &grant_id,
             "--action-id",
@@ -484,4 +497,209 @@ fn duplicate_action_id_is_refused_and_keeps_journal_verifiable() {
 
     let verify = ok(&h, &["journal", "verify", "--session", session]);
     assert!(verify.contains("journal OK"), "{verify}");
+}
+
+/// A hand-edited journal must be rejected on load, so the admission path can
+/// never operate on tampered state (fail closed — not only under `journal
+/// verify`). Regression for the privilege-escalation-via-tamper finding.
+#[test]
+fn tampered_journal_is_refused_on_every_command() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-tamper";
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a",
+            "--workspace",
+            "w",
+            "--goal",
+            "g",
+        ],
+    );
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "/tmp/f.txt",
+            "--actions",
+            "read",
+        ],
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id");
+
+    // Tamper: widen the grant from read to read+write directly in the journal,
+    // without recomputing the hash chain.
+    let journal = PathBuf::from(&h)
+        .join("sessions")
+        .join(session)
+        .join("journal.jsonl");
+    let original = std::fs::read_to_string(&journal).expect("read journal");
+    let tampered = original.replacen("[\"read\"]", "[\"read\",\"write\"]", 1);
+    assert_ne!(original, tampered, "tamper edit must change the journal");
+    std::fs::write(&journal, tampered).expect("write tampered journal");
+
+    // Every command that loads the journal must now fail closed.
+    assert!(
+        cli(&h, &["journal", "verify", "--session", session]).is_err(),
+        "journal verify must reject a tampered chain"
+    );
+    assert!(
+        cli(&h, &["trace", "show", "--session", session]).is_err(),
+        "trace show must refuse to render tampered state"
+    );
+    let propose = cli(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "t",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/tmp/f.txt",
+            "--resolved-target",
+            "/tmp/f.txt",
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-escalate",
+            "--side-effects",
+            "local_write",
+        ],
+    );
+    assert!(
+        propose.is_err(),
+        "admission must fail closed against a tampered journal, got: {propose:?}"
+    );
+}
+
+/// A `--session` id is attacker-controlled and used as a path segment, so an id
+/// that escapes a single safe segment must be rejected (no path traversal).
+#[test]
+fn path_traversal_session_id_is_rejected() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    for bad in ["../../pwned", "a/b", "..", ".", "with space", ""] {
+        let out = cli(
+            &h,
+            &[
+                "session",
+                "create",
+                "--session",
+                bad,
+                "--agent",
+                "a",
+                "--workspace",
+                "w",
+                "--goal",
+                "g",
+            ],
+        );
+        assert!(out.is_err(), "unsafe session id {bad:?} must be rejected");
+    }
+    // Nothing was written outside the store root.
+    let escaped = PathBuf::from(&h).join("../pwned");
+    assert!(
+        !escaped.exists(),
+        "traversal must not create files outside root"
+    );
+}
+
+/// A path-prefix grant must fail closed when no kernel-derived `resolved_target`
+/// is supplied: the CLI (the agent surface) must not infer it from the agent's
+/// own claimed target. Only an exact-resource grant admits without a resolved
+/// target.
+#[test]
+fn path_prefix_grant_without_resolved_target_fails_closed() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-noresolve";
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a",
+            "--workspace",
+            "w",
+            "--goal",
+            "g",
+        ],
+    );
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "*",
+            "--actions",
+            "read,write",
+            "--path-prefix",
+            "/ws",
+        ],
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id");
+    // No --resolved-target: the path constraint cannot be satisfied -> fail closed.
+    let out = ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "t",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/ws/x.txt",
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-noresolve",
+            "--side-effects",
+            "local_write",
+        ],
+    );
+    assert!(
+        out.contains("NeedsNarrowedGrant"),
+        "path-prefix grant must fail closed without a resolved target:\n{out}"
+    );
 }

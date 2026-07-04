@@ -213,17 +213,18 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         resource_kind: args::require_enum(args, "target-kind")?,
         resource_id: args.require("target")?.to_string(),
     };
-    // For file-path targets we default the resolved (canonical) target to the
-    // requested one so path-prefix constraints can be evaluated; callers that
-    // resolve symlinks themselves may override it.
-    let resolved_target = match args.get("resolved-target") {
-        Some(value) => Some(CapabilitySelector {
-            resource_kind: target.resource_kind.clone(),
-            resource_id: value.to_string(),
-        }),
-        None if target.resource_kind == ResourceKind::FilePath => Some(target.clone()),
-        None => None,
-    };
+    // `resolved_target` is a KERNEL-DERIVED field (final.md §7.4): the canonical,
+    // symlink-resolved target must be computed by a mediation point (the sandbox
+    // / gateway lane), never inferred from the agent's own claimed path. The CLI
+    // is the agent surface, so it leaves `resolved_target` unset unless a real
+    // mediation point supplies one via `--resolved-target`. Consequently a
+    // path-prefix grant fails closed here (core's `path_constraints_allow`
+    // requires a resolved target) until the sandbox lane (slice 5) sets it —
+    // rather than admitting against the agent's unverified, un-canonicalized path.
+    let resolved_target = args.get("resolved-target").map(|value| CapabilitySelector {
+        resource_kind: target.resource_kind.clone(),
+        resource_id: value.to_string(),
+    });
 
     let inputs_summary = args.get_or("summary", "").to_string();
     let inputs_digest = hash_json(&inputs_summary)?;
