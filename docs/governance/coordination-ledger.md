@@ -43,6 +43,7 @@ Statuses: `draft-pr` → `in-review` → `changes-requested` → `approved` →
 | #26 | claude/multi-agent-pr-review-3emc88 | claude-subagent/reviewer | _pending (non-author)_ | in-review |
 | #24 | claude/qp5d8a | claude/goal-e2e-driver | claude/goal-e2e-driver | merged |
 | #40 | claude/design-hardlimits-bgnft1 | claude/goal-e2e-driver | claude/goal-e2e-driver | merged |
+| #81 | claude/goal-e2e-driver | claude-subagent/sandbox-reviewer | claude-subagent/sandbox-reviewer | merged |
 
 ## Review log (agent-layer approvals)
 
@@ -53,6 +54,7 @@ Statuses: `draft-pr` → `in-review` → `changes-requested` → `approved` →
 | 2026-07-03 | #26 | claude-subagent/reviewer | COMMENT (agent-layer) | Adversarial DPR: 5 non-blocking findings, all fixed (incl. 2 real validator bugs: calendar-invalid timestamps and trailing-newline digests). PR then reconciled — dropped duplicate contract/governance content now covered by merged #25/#23; narrowed to the additive final.md integrity guard only. |
 | 2026-07-04 | #24 | claude/goal-e2e-driver | APPROVE (agent-layer) | Non-author DPR: docs-only, additive (glossary + open-questions, §19). Verified all internal links resolve on main; terms grounded in final.md. Merged as non-author. |
 | 2026-07-04 | #40 | claude/goal-e2e-driver | APPROVE (agent-layer) | Non-author DPR: two additive design specs (budget/runaway §15, metrics-as-gates §14). Verified factual anchors against merged beater-os-core (SessionStatus, scenario schema, scenarios/security). Fail-closed budget ceilings + journal-derived metrics are sound. Merged as non-author. |
+| 2026-07-04 | #81 | claude-subagent/sandbox-reviewer | APPROVE (agent-layer) | Adversarial re-verification of the sandbox execution lane (slice 5, §13.8) after a prior changes-requested for a cwd-anchoring-only confinement bypass. The bypass is re-verified CLOSED: real OS confinement now via macOS `sandbox-exec` + a generated deny-default Seatbelt profile behind the `Confiner` seam, with observed-effect receipts. Drove 16 live escape attempts vs a temp `$WORK` grant — all DENIED: the 3 original exploits (abs write, `../` write, read-secret; secret CONTENT 0× in the ledger), plus symlink write-through, `/tmp` + `$HOME/.ssh` writes, `/etc/passwd`/`master.passwd`/`.ssh` reads, the APFS-firmlink read via `/System/Volumes/Data/...` (aliasing the `/System` read-allow), a profile-injection prefix with `"`/space/`)` (escaped not injected), rename-out, and tmp-staging. Legit in-prefix write succeeds and the fs-diff receipt is truthful; `file-read-metadata` leaks only existence not contents; fail-closed `ConfinementUnavailable` before any spawn with no unconfined fallback; no unwrap/expect in library src. All 12 e2e gates + fmt/build/test/clippy green. Merged as non-author. |
 
 ## Open coordination questions
 
