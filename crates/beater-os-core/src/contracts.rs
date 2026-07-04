@@ -49,6 +49,95 @@ pub enum RiskClass {
     Critical,
 }
 
+impl RiskClass {
+    /// Deterministic risk floor for an action, derived from its intrinsic
+    /// properties (issue #8; see `docs/design/risk-taxonomy.md`).
+    ///
+    /// The agent proposes `risk_class` in the manifest, but risk can be raised
+    /// by policy and never lowered by the agent (`final.md` §12.3). This is the
+    /// executable assignment rule: the minimum class an action's declared side
+    /// effects, data classes, and action kind justify. Admission consumes it as
+    /// a floor — a manifest rating itself below the floor is under-declaring.
+    ///
+    /// Fail-safe by construction: the result is the maximum over every
+    /// contributor, so any single high-risk facet escalates the whole action.
+    /// An empty action (no side effects, no data) floors at [`RiskClass::Low`],
+    /// which the caller still admits only if a grant allows it.
+    pub fn derive_floor(
+        action_kind: &ActionKind,
+        side_effects: &BTreeSet<SideEffectClass>,
+        data_classes: &BTreeSet<DataClass>,
+    ) -> RiskClass {
+        let mut floor = action_kind_risk(action_kind);
+        for effect in side_effects {
+            floor = floor.max(side_effect_risk(effect));
+        }
+        for class in data_classes {
+            floor = floor.max(data_class_risk(class));
+        }
+        floor
+    }
+}
+
+/// Intrinsic risk of an action verb, independent of target. `Critical` is
+/// reserved for irreversible economic loss (`Spend`). Verbs that deploy,
+/// delegate authority, execute code, submit forms, or communicate reach outside
+/// the workspace with serious but typically recoverable effect (high); local
+/// writes and memory are reversible (medium); reads, navigation, and asking a
+/// human are observations (low). This matches the risk ratings the merged
+/// admission tests already assume (deploy = high, spend = critical).
+fn action_kind_risk(action_kind: &ActionKind) -> RiskClass {
+    match action_kind {
+        ActionKind::Read | ActionKind::Navigate | ActionKind::AskHuman => RiskClass::Low,
+        ActionKind::Write | ActionKind::Remember => RiskClass::Medium,
+        ActionKind::Execute
+        | ActionKind::Submit
+        | ActionKind::Communicate
+        | ActionKind::Deploy
+        | ActionKind::Delegate => RiskClass::High,
+        ActionKind::Spend => RiskClass::Critical,
+    }
+}
+
+/// Intrinsic risk of a side-effect class. `Payment` is the one irreversible
+/// economic effect (critical); network writes, browser submits, outbound
+/// communication, delegation, deployment, and cloud mutation cross a trust
+/// boundary with recoverable effect (high); local and memory writes are
+/// reversible (medium); no effect is an observation (low).
+fn side_effect_risk(side_effect: &SideEffectClass) -> RiskClass {
+    match side_effect {
+        SideEffectClass::None => RiskClass::Low,
+        SideEffectClass::LocalWrite | SideEffectClass::MemoryWrite => RiskClass::Medium,
+        SideEffectClass::NetworkWrite
+        | SideEffectClass::BrowserSubmit
+        | SideEffectClass::HumanCommunication
+        | SideEffectClass::Delegation
+        | SideEffectClass::Deployment
+        | SideEffectClass::CloudMutation => RiskClass::High,
+        SideEffectClass::Payment => RiskClass::Critical,
+    }
+}
+
+/// Risk contribution of touching data of a given sensitivity. Secrets and
+/// financial data are high; personal and customer data are medium; public,
+/// internal, code, tool output, and untrusted-provenance classes do not by
+/// themselves raise the floor (untrusted provenance is an injection concern
+/// carried by taint labels, not an intrinsic sensitivity).
+fn data_class_risk(data_class: &DataClass) -> RiskClass {
+    match data_class {
+        DataClass::Secret | DataClass::Financial => RiskClass::High,
+        DataClass::Personal | DataClass::Customer => RiskClass::Medium,
+        DataClass::Public
+        | DataClass::Internal
+        | DataClass::Code
+        | DataClass::Binary
+        | DataClass::ToolOutput
+        | DataClass::UntrustedWeb
+        | DataClass::UntrustedEmail
+        | DataClass::UntrustedDocument => RiskClass::Low,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DataClass {

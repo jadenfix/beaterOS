@@ -90,6 +90,24 @@ impl PolicyEngine {
             ));
         }
 
+        let derived_floor = RiskClass::derive_floor(
+            &manifest.action_kind,
+            &manifest.expected_side_effects,
+            &manifest.data_classes,
+        );
+        if manifest.risk_class < derived_floor {
+            return Ok(decision(
+                manifest,
+                manifest_hash,
+                ctx,
+                DecisionResult::Denied,
+                matched_rules,
+                "manifest under-rates risk below the floor its action kind, side effects, and data classes require",
+                DecisionFollowup::none(),
+            ));
+        }
+        matched_rules.push("manifest_risk_meets_derived_floor".to_string());
+
         let matching_grants: Vec<&CapabilityGrant> = ctx
             .grants
             .iter()

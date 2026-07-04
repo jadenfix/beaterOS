@@ -157,6 +157,83 @@ fn policy_requires_narrowed_grant_for_over_risk_action() {
 }
 
 #[test]
+fn derive_floor_ranks_effects_data_and_verbs() {
+    // Observation floors at Low.
+    assert_eq!(
+        RiskClass::derive_floor(&ActionKind::Read, &set([SideEffectClass::None]), &set([])),
+        RiskClass::Low
+    );
+    // A reversible local write floors at Medium.
+    assert_eq!(
+        RiskClass::derive_floor(
+            &ActionKind::Write,
+            &set([SideEffectClass::LocalWrite]),
+            &set([DataClass::Internal])
+        ),
+        RiskClass::Medium
+    );
+    // Deployment is a recoverable external mutation: High.
+    assert_eq!(
+        RiskClass::derive_floor(
+            &ActionKind::Deploy,
+            &set([SideEffectClass::Deployment]),
+            &set([])
+        ),
+        RiskClass::High
+    );
+    // Payment is the irreversible economic effect: Critical.
+    assert_eq!(
+        RiskClass::derive_floor(
+            &ActionKind::Spend,
+            &set([SideEffectClass::Payment]),
+            &set([])
+        ),
+        RiskClass::Critical
+    );
+    // Touching secret data raises an otherwise-benign read to High (fail-safe max).
+    assert_eq!(
+        RiskClass::derive_floor(
+            &ActionKind::Read,
+            &set([SideEffectClass::None]),
+            &set([DataClass::Secret])
+        ),
+        RiskClass::High
+    );
+}
+
+#[test]
+fn policy_denies_manifest_that_under_rates_its_derived_floor() {
+    // Execute over a local write floors at High by action kind alone, with no
+    // external side effect, so the floor check fires cleanly. Labeling it Low
+    // is the agent lowering risk that policy reserves the right to raise (#8).
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Execute;
+    manifest.expected_side_effects = set([SideEffectClass::LocalWrite]);
+    manifest.risk_class = RiskClass::Low;
+    let ctx = admission_context(now, vec![grant_for_file(now)]);
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("under-rates risk"));
+}
+
+#[test]
+fn policy_records_derived_floor_rule_for_correctly_rated_manifest() {
+    // The default read manifest rates itself Low and its derived floor is Low,
+    // so it meets the floor and the rule is recorded before grant evaluation.
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let ctx = admission_context(now, vec![grant_for_file(now)]);
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Allowed);
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"manifest_risk_meets_derived_floor".to_string())
+    );
+}
+
+#[test]
 fn policy_enforces_path_prefix_constraints_even_with_wildcard_resource() {
     let now = fixed_time();
     let mut manifest = read_manifest();
