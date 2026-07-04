@@ -43,6 +43,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "beater-os-sandbox"
+version = "0.1.0"
+dependencies = [
+ "beater-os-core",
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "beater-os-tool-registry"
 version = "0.1.0"
 dependencies = [
