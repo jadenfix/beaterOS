@@ -68,6 +68,7 @@ fn grant_for(grant_id: &str, session_id: &str, holder: &str) -> CapabilityGrant 
         policy_version: "v1".to_string(),
         reason: "read repo".to_string(),
         revoked: false,
+        parent_grant_id: None,
     }
 }
 
