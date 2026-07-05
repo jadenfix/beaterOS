@@ -46,7 +46,11 @@ risk).
 - `effective_risk >= grant.approval.threshold_risk` → **needs human approval**.
 - Untrusted taint (`UntrustedWeb/Email/Document`) on a `Spend`/`Deploy`/`Delegate`
   action → **needs action-bound approval** (cannot be auto-allowed).
-- `effective_risk >= High` → **needs a passed simulation** before execution.
+- `effective_risk >= High` **and** the action has an external side effect
+  (`manifest.has_external_side_effect()`) → **needs a passed simulation** before
+  execution. A high-risk *local* action (e.g. `Secret`/`Financial` data with no
+  external side effect) is **not** simulation-gated by the shipped code — it
+  proceeds once grants/approvals pass.
 - **Payment safety is separate from the tier system:** a payment
   (`is_payment_action`) is admitted only against an active `PaymentMandate` bound
   to the session+holder and covering the amount (`final.md` §12.7). So "spend is

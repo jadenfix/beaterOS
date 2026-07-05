@@ -29,13 +29,15 @@ Finding-by-finding state on current `main`:
 - **Resolved on `main`:** #2 (LICENSE), #4 (glossary), #7 (threat model), #11
   (schemas/`spec/VERSION`), #12 (example traces), #14 (success-metrics-and-gates),
   #15 (budget-enforcement doc), #16/#20 (source matrix + open questions). #8
-  (risk floor) and #10 (revocation chain) are **partly shipped** — see the
-  reconciled `docs/design/risk-class.md` and `docs/design/revocation.md`, which
-  now document shipped behavior and the narrow remainder.
+  (risk floor) is **partly shipped** — see the reconciled
+  `docs/design/risk-class.md`. #10 (revocation) is covered by the merged
+  `docs/design/revocation-semantics.md` (this lane's duplicate `revocation.md`
+  was dropped in favor of it).
 - **Still open / lighter:** #3 (README depth), #5 (doc split), #6 (`final.md`
   naming consistency — `final.md` is integrity-locked, so tracked not edited),
   #9 (redaction mechanism — spec in `docs/design/journal-redaction.md`), #17
-  (doc-health CI — governance lane).
+  (doc-health CI — governance lane). #10's remaining pieces (runtime abort +
+  compensation trigger) are already scoped in `revocation-semantics.md` §5.
 
 The original findings list below is preserved verbatim as the historical record.
 
