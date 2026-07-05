@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 #
-# mvp-demo.sh — run the beaterOS Minimum Viable proof end to end, locally.
+# mvp-demo.sh — run a beaterOS contract-loop smoke demo locally.
 #
-# This drives the real `beaterosctl` through the full contract loop from
+# This drives the real `beaterosctl` through the local contract loop used by
 # `final.md` §24: create a session, issue a scoped capability grant, execute an
 # action in the sandbox, verify the hash-chained journal, and render a trace
-# with receipts. It also proves the two fail-closed paths: an action with no
-# grant, and an action whose grant does not cover the target path, must both be
-# refused with no side effect.
+# with receipts. It also checks two fail-closed paths: an action with no grant,
+# and an action whose grant does not cover the target path, must both be refused
+# with no side effect.
+#
+# This is not the full §24 MVP proof. It does not exercise a repo edit task,
+# sandboxed project tests, push/deploy/email/browser/spend denials, or scenario
+# replay. Those remain broader release gates; this script is a narrow, runnable
+# smoke check for the local session -> grant -> action -> receipt -> trace loop.
 #
 # It is both a human-readable demo (it prints each step) and a smoke gate: it
 # asserts every expected outcome and exits non-zero on any failure, so it can be
@@ -44,7 +49,7 @@ step() {
   echo "==> $1"
 }
 
-echo "beaterOS MVP proof (final.md §24) — store: $BEATEROS_HOME"
+echo "beaterOS contract-loop smoke demo (final.md §24 local path) — store: $BEATEROS_HOME"
 
 step "Build beaterosctl"
 cargo build -q -p beaterosctl
@@ -106,9 +111,9 @@ step "6. Show the trace (grants, actions, decisions, receipts)"
 
 echo
 echo "===================================================================="
-echo "MVP proof: $pass checks passed, $fail failed."
+echo "Contract-loop smoke demo: $pass checks passed, $fail failed."
 if [ "$fail" -ne 0 ]; then
   echo "RESULT: FAIL"
   exit 1
 fi
-echo "RESULT: PASS — beaterOS runs the full §24 contract loop locally."
+echo "RESULT: PASS — beaterOS runs the local session/grant/action/receipt/trace loop."
