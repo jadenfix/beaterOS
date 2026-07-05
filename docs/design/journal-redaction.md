@@ -1,106 +1,88 @@
-# Design Spec: Journal Redaction Without Breaking Integrity
+# Design Spec: Redaction Without Breaking Integrity
 
-Status: design spec closing issue #9. Audit/plan-hardening lane (PR #21).
-Grounded in the shipped journal at `crates/beater-os-core/src/journal.rs` and
-`hash.rs`. Reconciles two `final.md` requirements that today are in direct
-tension in the code: an **append-only, hash-linked journal** (§8.3, §13.11) that
-must also support **redaction / right-to-be-forgotten** (§3.4, §10.4 "redaction
-without destroying integrity", §12.5).
+Status: design spec closing issue #9. Audit/plan-hardening lane (PR #21). Aligned
+to `final.md` §8.16 / §13.11 (the receipt-granularity + Merkle-anchor model) and
+the shipped `crates/beater-os-core/src/{journal.rs,hash.rs}`. Reconciles the
+append-only integrity requirement with redaction / right-to-be-forgotten (§3.4,
+§10.4, §12.5).
 
-## 1. The problem is concrete, not hypothetical
+> Reconciliation note (2026-07-05): an earlier draft (a) treated per-`JournalEvent`
+> hashing as the integrity model and (b) used a content-addressed `content_ref =
+> H(payload)`. Both are corrected here: `final.md` §8.16 targets **receipt-
+> granularity** hash-linking with **Merkle anchors**, not per-event hashing; and a
+> raw `H(payload)` reference is a **guessable digest** of low-entropy payloads that
+> would survive redaction, defeating erasure.
 
-The merged journal embeds **full contract objects inline** in each event
-(`journal.rs`):
+## 1. Integrity model to design against (final.md §8.16, Issue #53)
 
-```rust
-pub enum JournalEvent {
-    SessionCreated  { session: AgentSession },
-    CapabilityGranted { grant: CapabilityGrant },
-    ActionProposed  { manifest: ActionManifest },   // full inputs_summary, target, ...
-    PolicyDecided   { decision: PolicyDecision },
-    ReceiptAppended { receipt: CapabilityReceipt },
-    MemoryWritten   { memory: MemoryRecord },        // full content
-    ...
-}
-```
+Not per-journal-event hashing. The target, per `final.md`:
 
-and the per-record hash covers the **entire event**:
+- **Hash-link at receipt granularity**, per-actor receipt chains
+  (`ReceiptLedger`), so concurrent subagents don't contend on one chain head.
+- **Merkle-batch at anchor points** — the session journal periodically anchors all
+  actor chain heads into one Merkle node (§8.16, §10.4). Verification = per-chain
+  links + anchor inclusion.
+- Pure observations are async/batched; nothing irreversible happens un-journaled.
 
-```rust
-record.hash = hash_json(&JournalHashView { seq, created_at, event, prev_hash });
-// verify_chain() recomputes exactly this and checks prev_hash linkage.
-```
+Redaction must preserve *both* the per-receipt links and the Merkle anchors while
+letting the underlying payload be erased. (Today `journal.rs` hashes each event
+inline via `hash_json`; that is the current implementation, but this spec targets
+the §8.16 model the code is moving toward, and the mechanism below works for both.)
 
-Consequences:
+## 2. Mechanism: commit to a salted digest, store payload behind an opaque handle
 
-1. Any secret/PII that reaches an `inputs_summary`, a `MemoryRecord.content`, or a
-   grant `reason` is stored **in full** in the journal.
-2. Deleting or masking any byte of that content changes `hash_json(event)`, which
-   breaks the record's `hash` and every subsequent `prev_hash` link →
-   `verify_chain()` fails. So today redaction and integrity are mutually
-   exclusive. This is exactly what §12.5 waves at ("redacted through references
-   without breaking the receipt chain") but the code does not yet implement.
+Split every redactable record (receipt or journal entry) into:
 
-Note: `CapabilityReceipt` already does the right thing partially — it carries
-`input_digest`/`output_digest`, not raw payloads. The fix generalizes that
-pattern to every event that can hold sensitive content.
-
-## 2. Mechanism: commit to a digest, store the payload separately
-
-Split every sensitive event into two parts:
-
-- **Envelope** (in the journal, hash-covered, never erased): non-sensitive
-  metadata + a `content_commitment` (a salted digest of the payload) + a
-  `content_ref` (content-addressed pointer).
-- **Payload** (in a separate, erasable content store keyed by `content_ref`):
-  the actual sensitive object.
-
-The chain hashes the **envelope**, i.e. the commitment — not the raw payload:
+- **Envelope** (in the hash-linked chain / Merkle leaf; never erased): non-
+  sensitive metadata + a `content_commitment` + an **opaque** `content_handle`.
+- **Payload** (in a separate, erasable content store, keyed by `content_handle`):
+  the sensitive object.
 
 ```
-content_commitment = H(salt || canonical_bytes(payload))
-envelope           = { seq, created_at, kind, non_sensitive_meta,
-                       content_ref, content_commitment, prev_hash }
-record.hash        = H(canonical_bytes(envelope))
+salt              = 32 random bytes                       // erased on redaction
+content_commitment = H(salt || canonical_bytes(payload))  // hiding commitment
+content_handle    = random 128-bit id                      // NOT H(payload)
+leaf/link hashes over the ENVELOPE (commitment + handle + meta), never the payload
 ```
 
-**Redaction = delete the payload (and its salt) from the content store.** The
-envelope, its `content_commitment`, and the whole hash chain are untouched, so
-`verify_chain()` still passes. What changes is only that the payload is no longer
-retrievable.
+**Redaction = delete the payload and its salt from the content store.** The
+envelope, its `content_commitment`, the receipt links, and the Merkle anchors are
+untouched, so verification still passes; the payload is simply unrecoverable.
 
-### 2.1 Why the salt
+### 2.1 Why the handle must be opaque and the commitment salted
 
-Without a salt, a low-entropy payload (e.g. an email address, a short secret) can
-be **confirmed** after redaction by an attacker who guesses the value and hashes
-it against the surviving commitment. A per-payload random `salt`, stored with the
-payload and erased on redaction, makes the commitment hiding: after redaction the
-commitment reveals nothing about the payload. (This is a standard commitment
-scheme; no novel crypto — §13.12 "do not invent primitives.")
+- A content-addressed `H(payload)` **leaks the payload**: an attacker who guesses a
+  low-entropy value (an email, a short secret) and hashes it confirms it against
+  the surviving digest. So the stored reference is a **random opaque handle**, not
+  a hash of content.
+- The integrity commitment is **salted** (`H(salt‖payload)`) and the salt is erased
+  with the payload, so after redaction the commitment is also non-guessing —
+  it proves "some payload was committed here" without revealing which. Standard
+  hiding commitment; no novel crypto (§13.12).
 
-## 3. Redaction as a first-class, audited event
+## 3. Redaction is a first-class, audited event
 
-Redaction must itself be authorized, recorded, and tamper-evident — not a silent
-delete. Add a journal event:
+Redaction must be authorized and recorded, not a silent delete. `JournalEvent`
+currently has no redaction variant, so add:
 
 ```rust
 RedactionApplied {
-    target_ref: ContentRef,      // which payload was erased
-    target_seq: u64,             // record whose payload this was
-    authorized_by: CapabilityId, // capability that permits redaction (fail-closed)
-    reason: String,              // e.g. "gdpr-erasure", "secret-leak-cleanup"
-    // no payload content here
+    target_handle: ContentHandle,   // which payload was erased
+    target_ref: ReceiptId | Seq,    // the record it belonged to
+    authorized_by: CapabilityId,    // capability permitting redaction (fail-closed)
+    reason: String,                 // e.g. "gdpr-erasure", "secret-leak-cleanup"
+    // no payload content
 }
 ```
 
-Because `RedactionApplied` is appended and hash-linked like any event, the
-journal proves *that* a redaction happened, *who* authorized it, and *when* —
-while proving nothing about the erased content. Redaction authority is a
-capability (fail-closed, §13.2); the model can never self-authorize it.
+Appended and Merkle-anchored like any record, so the journal proves *that* a
+redaction happened, *who* authorized it, and *when* — while proving nothing about
+the erased content. Redaction authority is a capability; the model can never
+self-authorize it (§13.2).
 
-## 4. Verification semantics (the important part)
+## 4. Verification truth table
 
-`verify_chain()` must distinguish three states for a redactable record:
+For a redactable record, verification distinguishes:
 
 | Payload present? | Matching `RedactionApplied`? | Commitment recomputes? | Verdict |
 | --- | --- | --- | --- |
@@ -109,45 +91,34 @@ capability (fail-closed, §13.2); the model can never self-authorize it.
 | no | no | (n/a) | **missing/tampered** — FAIL |
 | yes | (any) | no | **tampered** — FAIL |
 
-So an authorized redaction is verifiable-as-redacted, and an unauthorized
-deletion is indistinguishable from tampering (i.e. it fails). This is the
-property §10.4 asks for.
+Authorized redaction verifies as redacted; unauthorized deletion is
+indistinguishable from tampering (fails). This is the §10.4 requirement.
 
-## 5. Dependencies and interactions
+## 5. Dependencies
 
-- **Canonical hashing (blocker):** `hash.rs` currently does
-  `sha256(serde_json::to_vec(..))`, which is **not** a canonical encoding. The
-  coordination ledger already raises adopting **JCS (RFC 8785)** so hashes verify
-  cross-language. Redaction commitments *must* use the canonical encoder too;
-  otherwise a re-serialization changes the commitment and looks like tampering.
-  This spec depends on that JCS decision landing.
-- **Receipts:** already digest-based; fold their `input_digest`/`output_digest`
-  into the same content-store + commitment model so one redaction path covers
-  receipts, manifests, and memory.
-- **Transparency log (§20.3, #20.3):** if envelopes are mirrored to an external
-  transparency log, only envelopes (commitments) go out — never payloads — so
-  erasure remains possible locally without contradicting an append-only external
-  log.
-- **Memory service (#9 ↔ memory):** `MemoryRecord` redaction/expiry (§10.8) uses
-  the same mechanism; "forget this everywhere you are allowed to" becomes
-  "erase the payload + append a `RedactionApplied`."
+- **Canonical hashing.** Commitments and links must use a canonical encoding (the
+  coordination ledger tracks adopting JCS/RFC 8785 so hashes verify cross-language);
+  `hash.rs` currently does `sha256(serde_json::to_vec(..))`. Redaction commitments
+  must use the same canonical encoder.
+- **Receipts already digest-based.** `CapabilityReceipt` carries
+  `input_digest`/`output_digest`; fold those into the same handle+commitment model
+  so one redaction path covers receipts and journal payloads. (Note: those digests
+  today are plain content digests — same guessability caveat as §2.1 if they ever
+  cover low-entropy inputs; salt them or keep them over already-high-entropy data.)
+- **Transparency log / Merkle anchors** carry only envelopes (commitments), never
+  payloads, so external anchoring never blocks local erasure.
 
-## 6. Follow-up kernel slice (for the contracts lane)
+## 6. Follow-up kernel slice (contracts/kernel lane)
 
-1. Introduce a `ContentRef` + content store; move sensitive fields of
-   `ActionManifest`/`MemoryRecord`/grant `reason` behind `content_ref` +
-   `content_commitment` in `JournalEvent`.
-2. Add `JournalEvent::RedactionApplied` and an `InMemoryJournal::redact(...)` that
-   requires a redaction capability and appends the record.
-3. Update `verify_chain()` to implement the §4 truth table.
-4. Switch `hash_json` to the canonical (JCS) encoder first.
-
-This spec is the contract; implementation belongs to the kernel lane (codex/#1),
-consistent with `risk-class.md`.
+1. Introduce `ContentHandle` + content store; move sensitive fields behind
+   `content_handle` + salted `content_commitment` at **receipt granularity**.
+2. Add `JournalEvent::RedactionApplied` + an authorized `redact(...)`.
+3. Implement the §4 truth table in chain + anchor verification.
+4. Use the canonical (JCS) encoder for all commitments/links.
 
 ## 7. Acceptance mapping (issue #9)
 
-- [x] Redaction-preserving-integrity mechanism specified, not just asserted — §2–§4.
-- [x] PII/secret erasure path described end-to-end — payload+salt erase, envelope
-      survives, `RedactionApplied` audits it (§2–§3).
-- [x] Verifier distinguishes authorized redaction from tampering — §4 truth table.
+- [x] Redaction-preserving-integrity mechanism specified against the §8.16 model — §1–§4.
+- [x] PII/secret erasure end-to-end — erase payload+salt; opaque handle + salted
+      commitment leak nothing (§2, §2.1).
+- [x] Verifier distinguishes authorized redaction from tampering — §4.

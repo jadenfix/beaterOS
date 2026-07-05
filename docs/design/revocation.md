@@ -1,143 +1,108 @@
 # Design Spec: Capability Revocation Semantics
 
-Status: design spec closing issue #10. Audit/plan-hardening lane (PR #21).
-Grounded in the shipped `CapabilityGrant` in
-`crates/beater-os-core/src/contracts.rs` and admission in `policy.rs`. Specifies
-what "revoke" means for **in-flight actions** and **delegated sub-grants** —
-both undefined today. Revocation is a §26 never-compromise and the core of
-incident response (§13.15 "freeze session, revoke grants").
+Status: documents the **shipped** revocation model and specifies the two narrow
+gaps that remain. Audit/plan-hardening lane (PR #21). Grounded in
+`crates/beater-os-core/src/{contracts.rs,policy.rs}`.
 
-## 1. What exists, and the two gaps
+> Reconciliation note (2026-07-05): an earlier draft claimed "delegated
+> propagation is missing", "no `parent_grant_id`", and "`revocation_handle` is
+> unused." Those are now **stale** — the delegation chain, a revocation registry,
+> and transitive liveness all ship. This revision credits the shipped design and
+> narrows the spec to the two things that are genuinely still missing:
+> **in-flight pre-commit re-check** and a **journaled revocation event**.
 
-`CapabilityGrant` today:
+## 1. What ships today
 
-```rust
-pub struct CapabilityGrant {
-    pub grant_id: String, pub issuer: String, pub holder: String,
-    pub session_id: String, pub scope: CapabilityScope, /* ... */
-    pub expires_at: DateTime<Utc>,
-    pub delegation: DelegationMode,     // None | AttenuatedOnly | SameScope
-    pub revocation_handle: String,      // present but UNUSED
-    pub revoked: bool,                  // local mutable flag
-}
-impl CapabilityGrant {
-    pub fn is_active(&self, now) -> bool { !self.revoked && self.expires_at > now }
-}
-```
+`CapabilityGrant` (`contracts.rs`) carries:
 
-Admission (`policy.rs`) checks `grants.all(|g| g.allows_manifest(manifest, now, actor))`
-once, at `admit()` time.
+- `parent_grant_id: Option<String>` — the grant this one was attenuated from; a
+  delegated grant is authority *indirected* through its parent.
+- `revocation_handle: String` — the registry key used to revoke this grant.
+- `revoked: bool` and `is_active_at(now)` — local liveness (expiry + revoked).
 
-**Gap 1 — delegated propagation is missing.** A delegated grant is a separate
-`CapabilityGrant` with its own `revoked` flag and **no `parent_grant_id`**.
-Revoking a parent therefore does nothing to its children. `DelegationMode`
-constrains *scope at creation* (`AttenuatedOnly`/`SameScope`) but there is no
-runtime link, so §8.2/§20.7 ("parent remains accountable", revocable delegation)
-and §6.2 ("revoked through indirection") are not enforced.
-
-**Gap 2 — in-flight actions are undefined.** `is_active`/`allows_manifest` run at
-admission only. A grant revoked *after* admission but *before/while* the side
-effect commits (a payment in flight, a form submitting) is never re-checked. For
-irreversible actions this is the case that matters most, and there is no rule.
-
-Also: `revocation_handle` is dead, and there is no `GrantRevoked` journal event
-(the `JournalEvent` enum has no revocation variant), so revocation isn't even
-recorded as causal history.
-
-## 2. Model: revocation as monotonic indirection (not a per-grant bool)
-
-Replace the local `revoked: bool` semantics with an indirection consulted at
-every check — this is what makes revocation *cascade* and *fail closed*.
-
-- A **RevocationSet** (monotonic; handles only ever added) holds revoked
-  `revocation_handle`s. Revoking = insert a handle. It never shrinks, so a
-  revoked grant can never silently reactivate.
-- Grants form a **delegation chain**: add `parent_grant_id: Option<String>`. A
-  grant carries (transitively) its own handle plus every ancestor's handle.
-- Effective liveness becomes a chain predicate:
+Admission (`policy.rs`) provides a `revoked_handles: BTreeSet<String>` in the
+`AdmissionContext` and enforces liveness over the **whole ancestor chain** via
+`grant_chain_effectively_active`:
 
 ```
-is_active(grant, now, revset) =
-      grant.expires_at > now
-   && no handle in ancestors(grant).revocation_handle ∈ revset
-   && all ancestors satisfy is_active            // child cannot outlive/outscope parent
+walk grant → parent → … :
+  fail closed if a cycle is seen (visited set)
+  fail closed if !current.is_active_at(now)  OR  revoked_handles.contains(current.revocation_handle)
+  fail closed if a named parent_grant_id is missing from the grant set
+  succeed when a root grant (no parent) is reached still-live
 ```
 
-Revoking a parent's handle now invalidates the whole subtree in one step — the
-"indirection" of §6.2 — without walking and mutating every child.
+So, already correct and enforced:
 
-### 2.1 Delegation invariants (checked at grant creation and at use)
+- **Revocation as indirection** — revoking a handle (adding it to
+  `revoked_handles`) invalidates the grant without mutating it (§6.2).
+- **Transitive/cascade revocation** — revoking a parent's handle fails the whole
+  subtree, because every descendant re-checks its ancestors' handles.
+- **Delegation-chain liveness** — a child cannot be exercised unless every
+  ancestor is live; cycles and dangling parents fail closed.
 
-For a child `c` of parent `p`:
+The §12.2 invariants ("revoked grants fail closed", "delegated grants revocable
+through indirection") therefore hold in code today.
 
-- `c.scope ⊆ p.scope` and `c.denied_actions ⊇ p.denied_actions` (attenuation;
-  `DelegationMode::AttenuatedOnly`).
-- `c.expires_at ≤ p.expires_at` (a child cannot outlive its parent).
-- `c` active ⇒ every ancestor active (liveness flows down, revocation flows down).
-- `p.delegation == None` ⇒ `c` cannot exist.
+## 2. Gap 1 — in-flight actions (pre-commit re-check)
 
-## 3. In-flight actions: two-phase admission
+`grant_chain_effectively_active` runs at `admit()` only. A grant revoked *after*
+admission but *before/while* an irreversible side effect commits is not
+re-checked. For payments/deploys this is the case that matters most.
 
-Split enforcement into two capability checks bound by the manifest's
-`idempotency_key`:
-
-1. **Admit** (unchanged, at `admit()`): full policy + capability check. Journaled
-   as `PolicyDecided`.
-2. **Pre-commit re-check** (new): immediately before the side effect is
-   *committed* by the executing lane, re-evaluate `is_active(..., revset_now)` for
-   every required grant against the **current** RevocationSet and clock.
-
-Outcomes at pre-commit:
+**Spec:** add a second capability check bound to the manifest's `idempotency_key`,
+run by the executing lane immediately before commit:
 
 | Side effect state when revocation observed | Action |
 | --- | --- |
-| Not yet committed (idempotency key unused) | **Abort**, fail closed; journal `ActionAborted{reason: revoked}`; no receipt (no side effect happened). |
-| Already committed (external txn done) | Cannot un-happen; emit the normal receipt **plus** run `compensation_plan` (§12.3) as a new, separately-admitted action; journal both. |
-| Commit in progress / unknown | Treat as committed (fail safe toward recording), then reconcile via the receipt's `external_ids`. |
+| Not yet committed (idempotency key unused) | **Abort**, fail closed; journal an `ActionAborted{reason: revoked}`; no receipt. |
+| Already committed (external txn done) | Emit the receipt **plus** run `compensation_plan` (§12.3) as a new, separately-admitted action; journal both. |
+| Commit in progress / unknown | Treat as committed; reconcile via the receipt's `external_ids`. |
 
-The idempotency key guarantees the pre-commit/commit pair is not double-executed
-under a retry.
+The pre-commit check reuses `grant_chain_effectively_active` against the current
+`revoked_handles`/clock, so it inherits the shipped cascade semantics for free.
+Guarantee: *no action is admitted or committed under a grant whose handle — or any
+ancestor's — is in `revoked_handles` as of that check.*
 
-## 4. Consistency and latency guarantee
+## 3. Gap 2 — revocation is not journaled
 
-- The RevocationSet is **monotonic** and every capability check reads the current
-  snapshot (a revocation epoch counter is sufficient: checks record the epoch they
-  observed).
-- Guarantee: *no action is admitted or committed under a grant whose handle — or
-  any ancestor's handle — is in the RevocationSet as of that check.* Bounded
-  staleness = the gap between admit and pre-commit, which the pre-commit check
-  closes for irreversible effects.
-- Incident mode (§13.15): "revoke grants / freeze session" = insert the session,
-  agent, or tool handles into the RevocationSet. All future admits and all
-  in-flight pre-commits then fail closed immediately.
+`JournalEvent` (`journal.rs`) has variants for session/grant/action/policy/
+receipt/memory/scenario/incident, but **no revocation variant** — so a revocation
+is not causal history and cannot be replayed or audited.
 
-## 5. Revocation is audited; receipts stay valid
+**Spec:** add `JournalEvent::GrantRevoked { revocation_handle, revoked_by:
+CapabilityId, reason, scope: grant|session|agent|tool }`, appended and hash-linked
+like any event. Revoking a grant does **not** invalidate receipts already produced
+under it (historical facts; `ReceiptLedger::verify_chain` unaffected) — revocation
+bounds the future, not the past. Incident mode (§13.15) = insert session/agent/
+tool handles into `revoked_handles` **and** append the `GrantRevoked` record.
 
-- Add `JournalEvent::GrantRevoked { revocation_handle, revoked_by: CapabilityId,
-  reason, scope: grant|session|agent|tool }`, appended and hash-linked like any
-  event. Revocation becomes causal history, not a silent mutation.
-- Revoking a grant does **not** invalidate receipts already produced under it —
-  those are historical facts and `ReceiptLedger::verify_chain` is unaffected.
-  Revocation bounds the *future*, not the past.
+## 4. Delegation invariants (verify these are enforced or add tests)
 
-## 6. Follow-up kernel slice (contracts lane)
+For a child `c` of parent `p`, in addition to the shipped chain-liveness:
 
-1. Add `parent_grant_id` to `CapabilityGrant`; enforce §2.1 invariants at
-   creation.
-2. Introduce a `RevocationSet`/epoch; thread it into `is_active` and
-   `allows_manifest` (replace the bare `revoked` bool read with a chain+set
-   check).
-3. Add a pre-commit re-check hook the executing lanes must call before commit,
-   keyed by `idempotency_key`.
-4. Add `JournalEvent::GrantRevoked` and an `ActionAborted` outcome.
+- `c.scope ⊆ p.scope`, `c.denied_actions ⊇ p.denied_actions` (attenuation;
+  `DelegationMode::AttenuatedOnly`).
+- `c.expires_at ≤ p.expires_at` (a child cannot outlive its parent).
+- `p.delegation == None` ⇒ `c` cannot be created.
 
-Contract only; implementation belongs to the kernel lane (codex/#1), consistent
-with `risk-class.md` and `journal-redaction.md`.
+These are creation-time checks; if not already enforced at grant issuance they
+should be added alongside the chain check.
 
-## 7. Acceptance mapping (issue #10)
+## 5. Follow-up kernel slice (contracts lane)
 
-- [x] In-flight action behavior on revoke is defined — §3 (two-phase + table).
-- [x] Parent→child (delegated) revocation propagation is defined — §2 indirection +
-      §2.1 invariants.
-- [x] Revocation interacts cleanly with receipts/compensation — §3 (compensation
-      for committed effects) and §5 (receipts remain valid).
+1. Add a pre-commit re-check hook the executing lanes call before commit, keyed by
+   `idempotency_key`, reusing `grant_chain_effectively_active`.
+2. Add `JournalEvent::GrantRevoked` and an `ActionAborted` outcome.
+3. Confirm/add the §4 creation-time attenuation + lifetime invariants.
+
+Everything else in this lane is already shipped; this is the narrowed remainder.
+
+## 6. Acceptance mapping (issue #10)
+
+- [x] Delegated (parent→child) revocation propagation — **shipped** (§1) and
+      documented.
+- [x] In-flight action behavior on revoke — specified (§2); pre-commit re-check is
+      the remaining kernel work.
+- [x] Revocation interacts cleanly with receipts/compensation — §2 (compensation)
+      and §3 (receipts stay valid).

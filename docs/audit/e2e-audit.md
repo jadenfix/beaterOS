@@ -1,11 +1,43 @@
 # beaterOS — End-to-End Repo Audit
 
-Date: 2026-07-03
-Scope: the repo as it stands today — `README.md` plus the 3,242-line design doc `final.md`. There is no implementation code; `final.md` is explicitly "research plan and system design plan only."
+**This is a point-in-time audit taken on 2026-07-03, when the repo was
+planning-only. It is a historical record, not a description of current `main`.
+See the Status Update below for what has since landed.**
 
-Because there is no code to exercise, "end-to-end / properly done" is assessed as: **is the plan complete, internally consistent, source-backed, and structured well enough to guide the implementation it describes?** The plan is strong as strategy; the findings below are about closing the loop.
+Original scope (2026-07-03): `README.md` plus the 3,242-line design doc
+`final.md`. At that time there was no implementation code; `final.md` was
+"research plan and system design plan only."
 
-Each finding is tracked as a GitHub issue. This document is the in-repo, point-in-time record.
+Because there was no code to exercise, "end-to-end / properly done" was assessed
+as: **is the plan complete, internally consistent, source-backed, and structured
+well enough to guide the implementation it describes?** The plan is strong as
+strategy; the findings below were about closing the loop.
+
+Each finding is tracked as a GitHub issue. This document is the in-repo record of
+that audit pass.
+
+## Status Update (2026-07-05) — most findings have landed
+
+Since this audit, the fleet has advanced `main` well past planning-only. `main`
+now carries a Rust workspace (`crates/beater-os-core`, `crates/beaterosctl`),
+contract JSON Schemas (`contracts/`, `spec/`), a conformance suite + tests,
+security/IoT/resilience scenarios, example traces, governance docs, a source
+matrix, an open-questions doc, a threat model, and a LICENSE.
+
+Finding-by-finding state on current `main`:
+
+- **Resolved on `main`:** #2 (LICENSE), #4 (glossary), #7 (threat model), #11
+  (schemas/`spec/VERSION`), #12 (example traces), #14 (success-metrics-and-gates),
+  #15 (budget-enforcement doc), #16/#20 (source matrix + open questions). #8
+  (risk floor) and #10 (revocation chain) are **partly shipped** — see the
+  reconciled `docs/design/risk-class.md` and `docs/design/revocation.md`, which
+  now document shipped behavior and the narrow remainder.
+- **Still open / lighter:** #3 (README depth), #5 (doc split), #6 (`final.md`
+  naming consistency — `final.md` is integrity-locked, so tracked not edited),
+  #9 (redaction mechanism — spec in `docs/design/journal-redaction.md`), #17
+  (doc-health CI — governance lane).
+
+The original findings list below is preserved verbatim as the historical record.
 
 ## Findings
 
