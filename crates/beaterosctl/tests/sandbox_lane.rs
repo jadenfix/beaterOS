@@ -11,6 +11,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use beater_os_core::{JournalEvent, JournalRecord};
 use beaterosctl::{CliError, run};
 use uuid::Uuid;
 
@@ -92,6 +93,18 @@ fn issue_grant(home: &str, session: &str, extra: &[&str]) -> String {
         .and_then(|line| line.strip_prefix("issued grant "))
         .map(str::to_string)
         .expect("grant id in output")
+}
+
+fn journal_records(home: &str, session: &str) -> Vec<JournalRecord> {
+    let journal = PathBuf::from(home)
+        .join("sessions")
+        .join(session)
+        .join("journal.jsonl");
+    fs::read_to_string(&journal)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<JournalRecord>(line).unwrap())
+        .collect()
 }
 
 #[test]
@@ -207,6 +220,32 @@ fn symlinked_grant_prefix_and_cwd_are_compared_in_canonical_namespace() {
     let created = PathBuf::from(&workdir).join("via_alias.txt");
     assert!(created.is_file(), "command must write inside real workdir");
     assert_eq!(fs::read_to_string(&created).unwrap(), "ok");
+    let proposed = journal_records(&h, session)
+        .into_iter()
+        .find_map(|record| match record.event {
+            JournalEvent::ActionProposed { manifest }
+                if manifest.action_id == "act-symlink-prefix" =>
+            {
+                Some(manifest)
+            }
+            _ => None,
+        })
+        .expect("action proposed event");
+    assert_eq!(proposed.target.resource_id, alias_dir);
+    assert_eq!(
+        proposed
+            .resolved_target
+            .as_ref()
+            .expect("resolved target")
+            .resource_id,
+        workdir.as_str()
+    );
+    let trace = ok(&h, &["trace", "show", "--session", session]);
+    assert!(trace.contains(&alias.display().to_string()), "{trace}");
+    assert!(
+        trace.contains(&format!("resolved: FilePath {workdir}")),
+        "{trace}"
+    );
     let verify = ok(&h, &["journal", "verify", "--session", session]);
     assert!(verify.contains("journal OK"), "{verify}");
 }

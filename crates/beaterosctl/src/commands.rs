@@ -412,14 +412,12 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let resolved = beater_os_sandbox::resolve_confined(&cwd, &confinement_prefixes)?;
     let resolved_str = resolved.display().to_string();
 
-    // (2) Build the manifest. This command is itself the mediation point, so
-    // the file-path target is the canonical path it just resolved. Keeping
-    // `target` and `resolved_target` in the same realpath namespace prevents a
-    // macOS `/var` -> `/private/var` grant alias from being misread as an escape
-    // by core's deterministic path-prefix policy.
+    // (2) Build the manifest. `target` preserves the requested cwd for durable
+    // audit/debugging and is not the authority value. `resolved_target` is the
+    // mediator-derived canonical path used by core path authority checks.
     let target = CapabilitySelector {
         resource_kind: ResourceKind::FilePath,
-        resource_id: resolved_str.clone(),
+        resource_id: cwd.clone(),
     };
     let resolved_target = Some(CapabilitySelector {
         resource_kind: ResourceKind::FilePath,
@@ -887,6 +885,12 @@ fn trace_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             manifest.target.resource_kind,
             manifest.target.resource_id
         ));
+        if let Some(resolved_target) = &manifest.resolved_target {
+            lines.push(format!(
+                "      resolved: {:?} {}",
+                resolved_target.resource_kind, resolved_target.resource_id
+            ));
+        }
         if let Some(decision) = projection.latest_decision(&manifest.action_id) {
             lines.push(format!(
                 "      decision: {:?} — {}",

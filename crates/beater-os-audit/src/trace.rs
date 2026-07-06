@@ -53,16 +53,29 @@ fn summarize_event(event: &JournalEvent) -> String {
             grant.scope.actions,
             grant.expires_at.to_rfc3339(),
         ),
-        JournalEvent::ActionProposed { manifest } => format!(
-            "action={} tool={} kind={:?} target={:?}:{} risk={:?} grants={:?}",
-            manifest.action_id,
-            manifest.tool_id,
-            manifest.action_kind,
-            manifest.target.resource_kind,
-            manifest.target.resource_id,
-            manifest.risk_class,
-            manifest.required_grants,
-        ),
+        JournalEvent::ActionProposed { manifest } => {
+            let resolved = manifest
+                .resolved_target
+                .as_ref()
+                .map(|target| {
+                    format!(
+                        " resolved={:?}:{}",
+                        target.resource_kind, target.resource_id
+                    )
+                })
+                .unwrap_or_default();
+            format!(
+                "action={} tool={} kind={:?} target={:?}:{}{} risk={:?} grants={:?}",
+                manifest.action_id,
+                manifest.tool_id,
+                manifest.action_kind,
+                manifest.target.resource_kind,
+                manifest.target.resource_id,
+                resolved,
+                manifest.risk_class,
+                manifest.required_grants,
+            )
+        }
         JournalEvent::PolicyDecided { decision } => format!(
             "decision={} action={} result={:?} why={:?}",
             decision.decision_id, decision.action_id, decision.result, decision.explanation
