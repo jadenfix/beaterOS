@@ -57,12 +57,16 @@ list.
 
 `grant issue` generates a revocation handle by default and prints it with the
 grant. Operators can provide a stable handle with `--revocation-handle <h>`.
-`grant revoke --grant-id <id> --reason <text>` resolves the issued grant's
-stored handle and appends `CapabilityRevoked`; callers cannot inject an
-arbitrary fake handle. `action propose` and `action execute` evaluate against
-the durable journal-projected revocation registry. They still accept repeatable
-`--revoked-handle <h>` flags as an external monotonic epoch overlay for replay
-or operator-supplied evidence.
+For `file_path` grants, `--resource-id` may be omitted when at least one
+`--path-prefix` is present; the CLI stores the selector as `*` so the canonical
+path-prefix constraint, not an exact directory selector, carries the authority.
+Concrete file grants can still pass `--resource-id <path>`, and non-file grants
+must continue to name `--resource-id` explicitly. `grant revoke --grant-id <id>
+--reason <text>` resolves the issued grant's stored handle and appends
+`CapabilityRevoked`; callers cannot inject an arbitrary fake handle. `action
+propose` and `action execute` evaluate against the durable journal-projected
+revocation registry. They still accept repeatable `--revoked-handle <h>` flags
+as an external monotonic epoch overlay for replay or operator-supplied evidence.
 
 ## Worked MVP flow
 
@@ -74,10 +78,12 @@ $ beaterosctl session create --session demo --agent coder-1 \
     --workspace repo --goal "fix the failing test"
 created session demo
 
-# Scoped file grant: any file, but only under /workspace/repo. The first grant
-# uses the session's default root capability id unless --grant-id is supplied.
+# Scoped file grant: any file, but only under /workspace/repo. Omitting
+# --resource-id with a file_path --path-prefix stores selector '*' so the prefix
+# is the authority boundary. The first grant uses the session's default root
+# capability id unless --grant-id is supplied.
 $ beaterosctl grant issue --session demo --resource-kind file_path \
-    --resource-id '*' --actions read,write --path-prefix /workspace/repo
+    --actions read,write --path-prefix /workspace/repo
 issued grant <grant-id>
 
 # A raw proposal with a path-prefix grant must include a resolved target supplied
@@ -157,7 +163,7 @@ filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
 ```console
 # Execute grant confined to a canonical work directory.
 $ beaterosctl grant issue --session demo --resource-kind file_path \
-    --resource-id '*' --actions execute --path-prefix /abs/work
+    --actions execute --path-prefix /abs/work
 issued grant <grant-id>
 
 $ beaterosctl action execute --session demo --tool shell \

@@ -57,19 +57,21 @@ BCTL="$ROOT/target/debug/beaterosctl"
 
 step "1. Create an agent session from a goal"
 "$BCTL" session create --agent agent:demo --workspace ws-demo \
-  --goal "Read an IoT sensor into the granted workspace" --session sess-demo
+  --goal "Read an IoT sensor into the granted workspace" --session sess-demo \
+  --initial-capability-id sess-demo-root-grant \
+  --initial-capability-id grant-narrow
 ok "session created"
 
 step "2. Issue a scoped capability grant (workspace read/write/execute)"
-"$BCTL" grant issue --session sess-demo --resource-kind file_path --resource-id "$WS" \
+"$BCTL" grant issue --session sess-demo --resource-kind file_path \
   --actions read,write,execute --path-prefix "$WS" --max-risk high \
   --reason "scoped demo workspace" >"$WORK/grant.out" 2>&1
 cat "$WORK/grant.out"
-GRANT="$(sed -n 's/^issued grant \([0-9a-f-]*\).*/\1/p' "$WORK/grant.out")"
+GRANT="$(sed -n 's/^issued grant \([^[:space:]]*\).*/\1/p' "$WORK/grant.out")"
 [ -n "$GRANT" ] && ok "grant issued ($GRANT)" || bad "no grant id parsed"
 
 step "3. Execute an action in the sandbox (writes a sensor reading)"
-"$BCTL" action execute --session sess-demo --tool tool:shell --command /bin/sh \
+"$BCTL" action execute --session sess-demo --tool shell --command sh \
   --arg -c --arg 'printf 22.5 > sensor.txt' --cwd "$WS" --grants "$GRANT" \
   --risk low --side-effects local_write --idempotency-key idem-read >"$WORK/exec.out" 2>&1
 cat "$WORK/exec.out"
@@ -83,7 +85,7 @@ cat "$WORK/verify.out"
 grep -q 'journal OK' "$WORK/verify.out" && ok "journal + receipt chains verify" || bad "journal did not verify"
 
 step "5a. Fail closed: an action with NO grant is refused"
-if "$BCTL" action execute --session sess-demo --tool tool:shell --command /bin/sh \
+if "$BCTL" action execute --session sess-demo --tool shell --command sh \
   --arg -c --arg 'printf leak > exfil.txt' --cwd "$WS" --grants "" \
   --risk low --idempotency-key idem-nogrant >"$WORK/nogrant.out" 2>&1; then
   bad "no-grant action was NOT refused"
@@ -93,11 +95,11 @@ fi
 [ -f "$WS/exfil.txt" ] && bad "exfil.txt leaked" || ok "no side effect from the refused action"
 
 step "5b. Fail closed: a grant that does not cover the target path is refused"
-"$BCTL" grant issue --session sess-demo --resource-kind file_path --resource-id "$OTHER" \
-  --actions read,write,execute --path-prefix "$OTHER" --max-risk high \
+"$BCTL" grant issue --session sess-demo --resource-kind file_path \
+  --grant-id grant-narrow --actions read,write,execute --path-prefix "$OTHER" --max-risk high \
   --reason "narrow grant covering elsewhere" >"$WORK/grant2.out" 2>&1
-NARROW="$(sed -n 's/^issued grant \([0-9a-f-]*\).*/\1/p' "$WORK/grant2.out")"
-if "$BCTL" action execute --session sess-demo --tool tool:shell --command /bin/sh \
+NARROW="$(sed -n 's/^issued grant \([^[:space:]]*\).*/\1/p' "$WORK/grant2.out")"
+if "$BCTL" action execute --session sess-demo --tool shell --command sh \
   --arg -c --arg 'printf escaped > outside.txt' --cwd "$WS" --grants "$NARROW" \
   --risk low --side-effects local_write --idempotency-key idem-escape >"$WORK/escape.out" 2>&1; then
   bad "out-of-scope action was NOT refused"
