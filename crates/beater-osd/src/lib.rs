@@ -161,6 +161,11 @@ impl Store {
                     "PolicyDecided must be written through admit_action".to_string(),
                 ));
             }
+            JournalEvent::SessionStatusChanged { .. } => {
+                return Err(DaemonError::Refused(
+                    "SessionStatusChanged must be written through a lifecycle API".to_string(),
+                ));
+            }
             _ => {}
         }
         self.with_session_lock(session_id, || {
@@ -457,6 +462,17 @@ impl Store {
                 JournalEvent::SessionCreated { session: created } => {
                     session = Some(created.clone());
                 }
+                JournalEvent::SessionStatusChanged {
+                    session_id: changed_id,
+                    to,
+                    ..
+                } => {
+                    if changed_id == session_id
+                        && let Some(projected) = session.as_mut()
+                    {
+                        projected.status = to.clone();
+                    }
+                }
                 JournalEvent::CapabilityGranted { grant } => grants.push(grant.clone()),
                 JournalEvent::PaymentMandateIssued { mandate } => mandates.push(mandate.clone()),
                 JournalEvent::ActionProposed { manifest } => {
@@ -616,6 +632,17 @@ fn admission_state_from_journal(
         match &record.event {
             JournalEvent::SessionCreated { session: created } => {
                 session = Some(created.clone());
+            }
+            JournalEvent::SessionStatusChanged {
+                session_id: changed_id,
+                to,
+                ..
+            } => {
+                if changed_id == session_id
+                    && let Some(projected) = session.as_mut()
+                {
+                    projected.status = to.clone();
+                }
             }
             JournalEvent::CapabilityGranted { grant } => {
                 grants.insert(grant.grant_id.clone(), grant.clone());

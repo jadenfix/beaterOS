@@ -183,8 +183,114 @@ fn valid_trace_passes_every_independent_check() -> Result<(), BeaterOsError> {
         report.failures().collect::<Vec<_>>()
     );
     assert_eq!(report.records, 5);
-    assert_eq!(report.checks.len(), 8);
+    assert_eq!(report.checks.len(), 9);
     assert_eq!(report.failures().count(), 0);
+    Ok(())
+}
+
+#[test]
+fn valid_session_status_transitions_pass_audit() -> Result<(), BeaterOsError> {
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session("S1"),
+        },
+        ts(1_000),
+    )?;
+    journal.append(
+        JournalEvent::SessionStatusChanged {
+            session_id: "S1".to_string(),
+            from: SessionStatus::Running,
+            to: SessionStatus::Paused,
+        },
+        ts(1_001),
+    )?;
+    journal.append(
+        JournalEvent::SessionStatusChanged {
+            session_id: "S1".to_string(),
+            from: SessionStatus::Paused,
+            to: SessionStatus::Running,
+        },
+        ts(1_002),
+    )?;
+    journal.append(
+        JournalEvent::SessionStatusChanged {
+            session_id: "S1".to_string(),
+            from: SessionStatus::Running,
+            to: SessionStatus::Canceled,
+        },
+        ts(1_003),
+    )?;
+    let report = verify_snapshot(&journal.snapshot());
+    assert!(
+        report.ok,
+        "expected pass, failures: {:?}",
+        report.failures().collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+#[test]
+fn detects_duplicate_session_creation() -> Result<(), BeaterOsError> {
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session("S1"),
+        },
+        ts(1_000),
+    )?;
+    let mut paused = session("S1");
+    paused.status = SessionStatus::Paused;
+    journal.append(JournalEvent::SessionCreated { session: paused }, ts(1_001))?;
+    let report = verify_snapshot(&journal.snapshot());
+    assert!(!report.ok);
+    let failed: BTreeSet<&str> = report.failures().map(|c| c.check.as_str()).collect();
+    assert!(failed.contains("session_lifecycle"));
+    assert!(!failed.contains("cryptographic_chain"));
+    Ok(())
+}
+
+#[test]
+fn detects_unknown_or_stale_session_transition() -> Result<(), BeaterOsError> {
+    let mut unknown = InMemoryJournal::new();
+    unknown.append(
+        JournalEvent::SessionStatusChanged {
+            session_id: "S-missing".to_string(),
+            from: SessionStatus::Running,
+            to: SessionStatus::Paused,
+        },
+        ts(1_000),
+    )?;
+    let unknown_report = verify_snapshot(&unknown.snapshot());
+    assert!(!unknown_report.ok);
+    let failed: BTreeSet<&str> = unknown_report
+        .failures()
+        .map(|c| c.check.as_str())
+        .collect();
+    assert!(failed.contains("session_lifecycle"));
+    assert!(failed.contains("referential_sessions"));
+    assert!(!failed.contains("cryptographic_chain"));
+
+    let mut stale = InMemoryJournal::new();
+    stale.append(
+        JournalEvent::SessionCreated {
+            session: session("S1"),
+        },
+        ts(1_000),
+    )?;
+    stale.append(
+        JournalEvent::SessionStatusChanged {
+            session_id: "S1".to_string(),
+            from: SessionStatus::Paused,
+            to: SessionStatus::Running,
+        },
+        ts(1_001),
+    )?;
+    let stale_report = verify_snapshot(&stale.snapshot());
+    assert!(!stale_report.ok);
+    let failed: BTreeSet<&str> = stale_report.failures().map(|c| c.check.as_str()).collect();
+    assert!(failed.contains("session_lifecycle"));
+    assert!(!failed.contains("cryptographic_chain"));
     Ok(())
 }
 

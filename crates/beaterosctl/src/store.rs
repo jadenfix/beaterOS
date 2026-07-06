@@ -256,6 +256,17 @@ impl Store {
                 JournalEvent::SessionCreated { session: created } => {
                     session = Some(created.clone());
                 }
+                JournalEvent::SessionStatusChanged {
+                    session_id: changed_id,
+                    to,
+                    ..
+                } => {
+                    if changed_id == session_id
+                        && let Some(projected) = session.as_mut()
+                    {
+                        projected.status = to.clone();
+                    }
+                }
                 JournalEvent::CapabilityGranted { grant } => grants.push(grant.clone()),
                 JournalEvent::PaymentMandateIssued { mandate } => mandates.push(mandate.clone()),
                 JournalEvent::ActionProposed { manifest } => {

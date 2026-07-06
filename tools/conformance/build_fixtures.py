@@ -349,6 +349,8 @@ def build_resilience_bundle() -> dict:
         "journal_root": GENESIS_HASH,
         "status": "canceled",
     }
+    created_session = dict(session)
+    created_session["status"] = "running"
 
     grant = {
         "grant_id": "grant-deploy-prod",
@@ -385,15 +387,16 @@ def build_resilience_bundle() -> dict:
                          "grant policy requires human approval for this risk class")
 
     events = [
-        {"kind": "session_created", "session": session},
+        {"kind": "session_created", "session": created_session},
         {"kind": "capability_granted", "grant": grant},
         {"kind": "action_proposed", "manifest": m_deploy},
         {"kind": "policy_decided", "decision": d_deploy},
         {"kind": "incident_annotated", "incident_id": "inc-review-timeout",
          "note": "Human approval for act-deploy-r42 timed out past the review deadline; "
                  "action not executed; session failing closed (final.md §14.2, §13.15)."},
+        {"kind": "session_status_changed", "session_id": sid, "from": "running", "to": "canceled"},
     ]
-    times = [tr.format(0), tr.format(0), tr.format(1), tr.format(1), tr.format(2)]
+    times = [tr.format(0), tr.format(0), tr.format(1), tr.format(1), tr.format(2), tr.format(2)]
     journal = _chain_journal(events, times)
 
     return {

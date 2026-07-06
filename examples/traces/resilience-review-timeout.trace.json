@@ -114,11 +114,11 @@
             "grant-deploy-prod"
           ],
           "journal_root": "0000000000000000000000000000000000000000000000000000000000000000",
-          "status": "canceled"
+          "status": "running"
         }
       },
       "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
-      "hash": "55996f3ed627353c1dc5b52680955198aa8980b1f9412e39edc08bf9a21c2c49"
+      "hash": "52beaf75f3a36e9a2d838076da47367c934eac4ad0419436d31095c3c7d286ee"
     },
     {
       "seq": 1,
@@ -157,8 +157,8 @@
           "reason": "Deploy approved releases to production."
         }
       },
-      "prev_hash": "55996f3ed627353c1dc5b52680955198aa8980b1f9412e39edc08bf9a21c2c49",
-      "hash": "2ca535e75213608814d8862051ec3a5cf194c6263c268e02456a9e9b7f9758b1"
+      "prev_hash": "52beaf75f3a36e9a2d838076da47367c934eac4ad0419436d31095c3c7d286ee",
+      "hash": "114817fbd0e78dfd83fe7d881d5b1a2f9f9bda4e1f5adbe87b6866456d0cc52e"
     },
     {
       "seq": 2,
@@ -190,8 +190,8 @@
           "human_explanation": "Deploy the approved release to production."
         }
       },
-      "prev_hash": "2ca535e75213608814d8862051ec3a5cf194c6263c268e02456a9e9b7f9758b1",
-      "hash": "7b5a62def2ff0fd4e30778338f95ffa9b35c23c732763313409e421d27ecc7bc"
+      "prev_hash": "114817fbd0e78dfd83fe7d881d5b1a2f9f9bda4e1f5adbe87b6866456d0cc52e",
+      "hash": "a84c42561631a370bfe74ff3d4f32efdc1a3b34e935a2c27831fbb5c6e66026c"
     },
     {
       "seq": 3,
@@ -207,8 +207,8 @@
           "created_at": "2026-07-03T14:01:00Z"
         }
       },
-      "prev_hash": "7b5a62def2ff0fd4e30778338f95ffa9b35c23c732763313409e421d27ecc7bc",
-      "hash": "0c7a8c8737ba74b47fa6b3895c0197152faad5c5a40ec80851663a66c0b42b7f"
+      "prev_hash": "a84c42561631a370bfe74ff3d4f32efdc1a3b34e935a2c27831fbb5c6e66026c",
+      "hash": "a9c0b6a0bdce43ad3e9f95ff78d4e031342f4505fe5b879d77b02eda3453ca9c"
     },
     {
       "seq": 4,
@@ -218,8 +218,20 @@
         "incident_id": "inc-review-timeout",
         "note": "Human approval for act-deploy-r42 timed out past the review deadline; action not executed; session failing closed (final.md §14.2, §13.15)."
       },
-      "prev_hash": "0c7a8c8737ba74b47fa6b3895c0197152faad5c5a40ec80851663a66c0b42b7f",
-      "hash": "ef900cfa7f3d5bb6d0a794f76a6455e8c4e7b01d9645ae6e0a225fd8b6d50f0b"
+      "prev_hash": "a9c0b6a0bdce43ad3e9f95ff78d4e031342f4505fe5b879d77b02eda3453ca9c",
+      "hash": "cbc02a4ad37836f8c0052744ae4d374e2e0115cb3257a0bc554c4a7ff5b2671b"
+    },
+    {
+      "seq": 5,
+      "created_at": "2026-07-03T14:02:00Z",
+      "event": {
+        "kind": "session_status_changed",
+        "session_id": "sess-deploy-001",
+        "from": "running",
+        "to": "canceled"
+      },
+      "prev_hash": "cbc02a4ad37836f8c0052744ae4d374e2e0115cb3257a0bc554c4a7ff5b2671b",
+      "hash": "cfcb857e746f156dfe1b0f2d647b596c97b699b5cfa811507c80287b503d5312"
     }
   ]
 }

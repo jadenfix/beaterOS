@@ -84,6 +84,7 @@ fn event_kinds(session: &Session) -> Vec<&'static str> {
         .iter()
         .map(|record| match record.event {
             JournalEvent::SessionCreated { .. } => "session_created",
+            JournalEvent::SessionStatusChanged { .. } => "session_status_changed",
             JournalEvent::CapabilityGranted { .. } => "capability_granted",
             _ => "other",
         })
@@ -120,33 +121,32 @@ fn full_legal_lifecycle_is_journaled_in_order_and_verifies() {
     session.cancel(at(1_004)).unwrap();
     assert_eq!(*session.status(), SessionStatus::Canceled);
 
-    // One genesis + three transition records, all SessionCreated snapshots.
+    // One genesis + three transition records. Genesis is creation; later records
+    // are explicit status transitions so auditors do not confuse them.
     assert_eq!(
         event_kinds(&session),
         vec![
             "session_created",
-            "session_created",
-            "session_created",
-            "session_created"
+            "session_status_changed",
+            "session_status_changed",
+            "session_status_changed"
         ]
     );
-    // Each snapshot records the status the session held after that step.
-    let statuses: Vec<SessionStatus> = session
+    let transitions: Vec<(SessionStatus, SessionStatus)> = session
         .journal()
         .records()
         .iter()
         .filter_map(|record| match &record.event {
-            JournalEvent::SessionCreated { session } => Some(session.status.clone()),
+            JournalEvent::SessionStatusChanged { from, to, .. } => Some((from.clone(), to.clone())),
             _ => None,
         })
         .collect();
     assert_eq!(
-        statuses,
+        transitions,
         vec![
-            SessionStatus::Running,
-            SessionStatus::Paused,
-            SessionStatus::Running,
-            SessionStatus::Canceled,
+            (SessionStatus::Running, SessionStatus::Paused),
+            (SessionStatus::Paused, SessionStatus::Running),
+            (SessionStatus::Running, SessionStatus::Canceled),
         ]
     );
     // Seqs are contiguous and the chain is intact.
@@ -385,12 +385,12 @@ fn interleaved_grant_and_lifecycle_preserve_order_and_chain() {
     assert_eq!(
         event_kinds(&session),
         vec![
-            "session_created",    // create
-            "capability_granted", // grant-1
-            "session_created",    // pause
-            "session_created",    // resume
-            "capability_granted", // grant-2
-            "session_created",    // cancel
+            "session_created",        // create
+            "capability_granted",     // grant-1
+            "session_status_changed", // pause
+            "session_status_changed", // resume
+            "capability_granted",     // grant-2
+            "session_status_changed", // cancel
         ]
     );
     let mut expected_grants = BTreeSet::new();

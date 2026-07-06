@@ -1,12 +1,12 @@
 use std::collections::BTreeSet;
 
 use beater_os_core::{
-    ActionKind, ActionManifest, AdmissionContext, ApprovalEvidence, ApprovalMode,
+    ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, ApprovalMode,
     ApprovalRequirement, Budget, CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput,
     CapabilityScope, CapabilitySelector, DataClass, DecisionResult, DelegationMode,
     GrantConstraints, InMemoryJournal, JournalEvent, PaymentIntent, PaymentMandate, PolicyDecision,
-    PolicyEngine, ReceiptLedger, ResourceKind, RiskClass, SideEffectClass, SimulationEvidence,
-    TaintLabel,
+    PolicyEngine, ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass,
+    SimulationEvidence, TaintLabel,
 };
 use chrono::{Duration, TimeZone, Utc};
 
@@ -75,6 +75,25 @@ fn admission_context(now: chrono::DateTime<Utc>, grants: Vec<CapabilityGrant>) -
         simulations: Vec::new(),
         mandates: Vec::new(),
         revoked_handles: BTreeSet::new(),
+    }
+}
+
+fn session_fixture(status: SessionStatus) -> AgentSession {
+    AgentSession {
+        session_id: "session-1".to_string(),
+        created_at: fixed_time(),
+        created_by: "user:jaden".to_string(),
+        agent_id: "agent:beater-os".to_string(),
+        workspace_id: "workspace-1".to_string(),
+        goal: "exercise the session lifecycle".to_string(),
+        constraints: Vec::new(),
+        policy_profile: "policy-v1".to_string(),
+        initial_capability_ids: BTreeSet::new(),
+        budget: Budget::default(),
+        model_policy: Default::default(),
+        memory_scope: None,
+        journal_root: "root".to_string(),
+        status,
     }
 }
 
@@ -1014,6 +1033,90 @@ fn journal_detects_event_tampering() -> Result<(), Box<dyn std::error::Error>> {
     }
     let tampered = InMemoryJournal::from_records(records);
     assert!(tampered.verify_chain().is_err());
+    Ok(())
+}
+
+#[test]
+fn journal_accepts_explicit_session_status_transitions() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session_fixture(SessionStatus::Running),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::SessionStatusChanged {
+            session_id: "session-1".to_string(),
+            from: SessionStatus::Running,
+            to: SessionStatus::Paused,
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::SessionStatusChanged {
+            session_id: "session-1".to_string(),
+            from: SessionStatus::Paused,
+            to: SessionStatus::Running,
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::SessionStatusChanged {
+            session_id: "session-1".to_string(),
+            from: SessionStatus::Running,
+            to: SessionStatus::Canceled,
+        },
+        now,
+    )?;
+
+    let report = journal.verify_chain()?;
+    assert_eq!(report.records, 4);
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_duplicate_session_creation() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session_fixture(SessionStatus::Running),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session_fixture(SessionStatus::Paused),
+        },
+        now,
+    )?;
+
+    assert!(journal.verify_chain().is_err());
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_stale_session_status_transition() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session_fixture(SessionStatus::Running),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::SessionStatusChanged {
+            session_id: "session-1".to_string(),
+            from: SessionStatus::Paused,
+            to: SessionStatus::Running,
+        },
+        now,
+    )?;
+
+    assert!(journal.verify_chain().is_err());
     Ok(())
 }
 

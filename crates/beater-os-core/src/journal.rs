@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
     ActionManifest, AgentSession, CapabilityGrant, DecisionResult, MemoryRecord, PaymentMandate,
-    PolicyDecision, ScenarioManifest,
+    PolicyDecision, ScenarioManifest, SessionStatus,
 };
 use crate::error::{BeaterOsError, BeaterOsResult};
 use crate::hash::{GENESIS_HASH, HashValue, hash_json};
@@ -16,6 +16,11 @@ use crate::receipt::{CapabilityReceipt, ReceiptLedger};
 pub enum JournalEvent {
     SessionCreated {
         session: AgentSession,
+    },
+    SessionStatusChanged {
+        session_id: String,
+        from: SessionStatus,
+        to: SessionStatus,
     },
     CapabilityGranted {
         grant: CapabilityGrant,
@@ -145,6 +150,7 @@ impl InMemoryJournal {
         let mut proposed_actions: BTreeMap<String, ActionManifest> = BTreeMap::new();
         let mut allowed_decisions: BTreeMap<String, HashValue> = BTreeMap::new();
         let mut latest_decision_by_action: BTreeMap<String, DecisionResult> = BTreeMap::new();
+        let mut session_statuses: BTreeMap<String, SessionStatus> = BTreeMap::new();
         let mut receipt_chain = Vec::new();
         for (idx, record) in self.records.iter().enumerate() {
             let expected_seq = idx as u64;
@@ -174,6 +180,7 @@ impl InMemoryJournal {
                 &mut proposed_actions,
                 &mut allowed_decisions,
                 &mut latest_decision_by_action,
+                &mut session_statuses,
                 &mut receipt_chain,
             )?;
             prev_hash = record.hash.clone();
@@ -190,9 +197,48 @@ fn verify_event_causality(
     proposed_actions: &mut BTreeMap<String, ActionManifest>,
     allowed_decisions: &mut BTreeMap<String, HashValue>,
     latest_decision_by_action: &mut BTreeMap<String, DecisionResult>,
+    session_statuses: &mut BTreeMap<String, SessionStatus>,
     receipt_chain: &mut Vec<CapabilityReceipt>,
 ) -> BeaterOsResult<()> {
     match &record.event {
+        JournalEvent::SessionCreated { session } => {
+            if session_statuses
+                .insert(session.session_id.clone(), session.status.clone())
+                .is_some()
+            {
+                return causality_error(
+                    record.seq,
+                    format!("session {} was created more than once", session.session_id),
+                );
+            }
+        }
+        JournalEvent::SessionStatusChanged {
+            session_id,
+            from,
+            to,
+        } => {
+            let Some(current) = session_statuses.get(session_id) else {
+                return causality_error(
+                    record.seq,
+                    format!("session transition references unknown session {session_id}"),
+                );
+            };
+            if current != from {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "session {session_id} transition from {from:?} does not match current status {current:?}"
+                    ),
+                );
+            }
+            if !is_valid_session_transition(from, to) {
+                return causality_error(
+                    record.seq,
+                    format!("session {session_id} illegal transition {from:?} -> {to:?}"),
+                );
+            }
+            session_statuses.insert(session_id.clone(), to.clone());
+        }
         JournalEvent::ActionProposed { manifest } => {
             if proposed_actions
                 .insert(manifest.action_id.clone(), manifest.as_ref().clone())
@@ -311,14 +357,25 @@ fn verify_event_causality(
             receipt_chain.push(receipt.clone());
             ReceiptLedger::from_receipts(receipt_chain.clone()).verify_chain()?;
         }
-        JournalEvent::SessionCreated { .. }
-        | JournalEvent::CapabilityGranted { .. }
+        JournalEvent::CapabilityGranted { .. }
         | JournalEvent::PaymentMandateIssued { .. }
         | JournalEvent::MemoryWritten { .. }
         | JournalEvent::ScenarioEvaluated { .. }
         | JournalEvent::IncidentAnnotated { .. } => {}
     }
     Ok(())
+}
+
+fn is_valid_session_transition(from: &SessionStatus, to: &SessionStatus) -> bool {
+    matches!(
+        (from, to),
+        (SessionStatus::Running, SessionStatus::Paused)
+            | (SessionStatus::Paused, SessionStatus::Running)
+            | (
+                SessionStatus::Running | SessionStatus::Paused,
+                SessionStatus::Canceled
+            )
+    )
 }
 
 fn causality_error<T>(seq: u64, reason: String) -> BeaterOsResult<T> {

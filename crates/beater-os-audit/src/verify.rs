@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use beater_os_core::{
-    CapabilityGrant, DecisionResult, JournalEvent, JournalRecord, JournalSnapshot,
+    CapabilityGrant, DecisionResult, JournalEvent, JournalRecord, JournalSnapshot, SessionStatus,
 };
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -93,6 +93,7 @@ pub fn verify_snapshot(snapshot: &JournalSnapshot) -> AuditReport {
         check_sequence_contiguous(snapshot),
         check_hash_linkage(snapshot),
         check_receipt_causality(snapshot),
+        check_session_lifecycle(snapshot),
         // Novel gap-fillers — invariants the core journal verifier does NOT check.
         check_referential_sessions(snapshot),
         check_grant_references(snapshot),
@@ -254,6 +255,11 @@ fn check_referential_sessions(snapshot: &JournalSnapshot) -> CheckResult {
                 known_sessions.insert(session.session_id.as_str());
                 None
             }
+            JournalEvent::SessionStatusChanged { session_id, .. } => Some((
+                "session transition",
+                session_id.as_str(),
+                session_id.as_str(),
+            )),
             JournalEvent::CapabilityGranted { grant } => {
                 Some(("grant", grant.grant_id.as_str(), grant.session_id.as_str()))
             }
@@ -281,6 +287,71 @@ fn check_referential_sessions(snapshot: &JournalSnapshot) -> CheckResult {
     CheckResult::pass(
         "referential_sessions",
         "all grants and actions reference known sessions",
+    )
+}
+
+/// A session may be created exactly once, and lifecycle updates must be explicit
+/// valid transitions from the current status.
+fn check_session_lifecycle(snapshot: &JournalSnapshot) -> CheckResult {
+    let mut statuses: BTreeMap<&str, &SessionStatus> = BTreeMap::new();
+    for record in &snapshot.records {
+        match &record.event {
+            JournalEvent::SessionCreated { session } => {
+                if statuses
+                    .insert(session.session_id.as_str(), &session.status)
+                    .is_some()
+                {
+                    return CheckResult::fail(
+                        "session_lifecycle",
+                        format!("session {} was created more than once", session.session_id),
+                    );
+                }
+            }
+            JournalEvent::SessionStatusChanged {
+                session_id,
+                from,
+                to,
+            } => {
+                let Some(current) = statuses.get(session_id.as_str()) else {
+                    return CheckResult::fail(
+                        "session_lifecycle",
+                        format!("transition references unknown session {session_id}"),
+                    );
+                };
+                if *current != from {
+                    return CheckResult::fail(
+                        "session_lifecycle",
+                        format!(
+                            "session {session_id} transition from {from:?} does not match current status {current:?}"
+                        ),
+                    );
+                }
+                if !is_valid_session_transition(from, to) {
+                    return CheckResult::fail(
+                        "session_lifecycle",
+                        format!("session {session_id} illegal transition {from:?} -> {to:?}"),
+                    );
+                }
+                statuses.insert(session_id.as_str(), to);
+            }
+            _ => {}
+        }
+    }
+    CheckResult::pass(
+        "session_lifecycle",
+        "sessions are created once and status transitions are valid",
+    )
+}
+
+fn is_valid_session_transition(from: &SessionStatus, to: &SessionStatus) -> bool {
+    matches!(
+        (from, to),
+        (SessionStatus::Running, SessionStatus::Paused)
+            | (SessionStatus::Paused, SessionStatus::Running)
+            | (
+                SessionStatus::Running | SessionStatus::Paused,
+                SessionStatus::Canceled
+            )
     )
 }
 
@@ -452,7 +523,7 @@ mod tests {
         let report = verify_snapshot(&snapshot);
         assert_eq!(report.records, 0);
         assert!(report.ok, "empty journal should pass: {:?}", report.checks);
-        assert_eq!(report.checks.len(), 8);
+        assert_eq!(report.checks.len(), 9);
         assert_eq!(report.failures().count(), 0);
     }
 }

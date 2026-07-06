@@ -42,11 +42,9 @@
 //! For every transition and grant bind the runtime appends the journal record
 //! first; only if the append succeeds does it mutate the observable
 //! [`Session::status`] / bound-grant set. If the append fails, the operation
-//! returns an error with no state change. Core exposes no
-//! `SessionPaused`/`SessionResumed`/`SessionCanceled` event, so lifecycle
-//! transitions are journaled as [`JournalEvent::SessionCreated`] carrying the
-//! session snapshot at its *new* status — the closest existing variant; see the
-//! `TODO(slice-3 follow-up)` in [`Session::transition`].
+//! returns an error with no state change. Core exposes
+//! [`JournalEvent::SessionStatusChanged`], preserving genesis as a real creation
+//! event and making pause/resume/cancel replay unambiguous for auditors.
 
 mod error;
 
@@ -208,18 +206,16 @@ impl Session {
         transition: Transition,
         now: DateTime<Utc>,
     ) -> SessionResult<JournalRecord> {
+        let from = self.session.status.clone();
         let next = next_status(transition, &self.session.status)?;
-        let mut snapshot = self.session.clone();
-        snapshot.status = next.clone();
-        // TODO(slice-3 follow-up): core exposes no SessionPaused/SessionResumed/
-        // SessionCanceled (or a generic SessionStatusChanged) JournalEvent, so a
-        // lifecycle transition is recorded via the closest existing variant,
-        // SessionCreated, carrying the session snapshot at its new status. The
-        // full status is preserved and the chain replays cleanly; a dedicated
-        // transition event would be more legible. Do not add it to core here.
-        let record = self
-            .journal
-            .append(JournalEvent::SessionCreated { session: snapshot }, now)?;
+        let record = self.journal.append(
+            JournalEvent::SessionStatusChanged {
+                session_id: self.session.session_id.clone(),
+                from,
+                to: next.clone(),
+            },
+            now,
+        )?;
         self.session.status = next;
         Ok(record)
     }
