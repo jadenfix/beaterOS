@@ -190,7 +190,25 @@ def run() -> list[str]:
     expect(admission.admit(hot, ctx3)["result"] == "needs_narrowed_grant",
            "constraint-less grant must not admit critical/secret action (default ceilings apply)")
 
-    # 7. Untrusted-taint gate must reject an approval from an UNAUTHORIZED reviewer
+    # 7. Expired grants are not live authority. They must hard-deny before the
+    #    generic "needs narrowed grant" path because there is no grant to narrow.
+    expired_grant = dict(grant)
+    expired_grant["expires_at"] = "2026-07-03T00:00:00Z"
+    expired_ctx = {"now": "2026-07-03T00:30:00Z", "actor_id": "agent", "session_id": "S",
+                   "policy_version": "p", "grants": [expired_grant], "approvals": [],
+                   "simulations": [], "mandates": [_payment_mandate()]}
+    expect(admission.admit(spend, expired_ctx)["result"] == "denied",
+           "expired grant must hard-deny rather than request narrowing")
+
+    # 7. Missing payment mandates are also hard-deny: an approval cannot create
+    #    payment authority when no active mandate covers the intent.
+    no_mandate_ctx = {"now": "2026-07-03T00:30:00Z", "actor_id": "agent", "session_id": "S",
+                      "policy_version": "p", "grants": [grant], "approvals": [],
+                      "simulations": [], "mandates": []}
+    expect(admission.admit(spend, no_mandate_ctx)["result"] == "denied",
+           "missing payment mandate must hard-deny")
+
+    # 9. Untrusted-taint gate must reject an approval from an UNAUTHORIZED reviewer
     #    (not just any bound approval). Regression for the second review finding.
     unauth_spend = {
         "action_id": "u", "session_id": "S", "tool_id": "pay", "action_kind": "spend",
@@ -220,7 +238,7 @@ def run() -> list[str]:
     expect(admission.admit(unauth_spend, ctx4)["result"] == "needs_approval",
            "approval from an unauthorized reviewer must not satisfy the untrusted-taint gate")
 
-    # 8. Receipt chain detects a tampered hash.
+    # 10. Receipt chain detects a tampered hash.
     r = {"receipt_id": "r", "seq": 0, "action_id": "a", "tool_id": "t",
          "target": {"resource_kind": "tool", "resource_id": "x"},
          "started_at": "2026-07-03T00:00:00Z", "finished_at": "2026-07-03T00:00:00Z",
@@ -231,7 +249,7 @@ def run() -> list[str]:
     r["status"] = "tampered"
     expect(bool(verify_receipt_chain([r])), "tampered receipt should be detected")
 
-    # 9. Journal causality must reject a decision bound to the wrong manifest
+    # 11. Journal causality must reject a decision bound to the wrong manifest
     #    digest, even when action_id and result look plausible.
     bound_manifest = {
         "action_id": "bound", "session_id": "S", "tool_id": "t", "action_kind": "read",
