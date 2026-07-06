@@ -51,6 +51,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "beater-os-runtime"
+version = "0.1.0"
+dependencies = [
+ "beater-os-core",
+ "beater-osd",
+ "chrono",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "beater-os-sandbox"
 version = "0.1.0"
 dependencies = [
