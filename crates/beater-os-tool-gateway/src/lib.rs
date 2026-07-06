@@ -18,13 +18,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use beater_os_core::{
-    ActionKind, ActionManifest, Budget, CapabilityGrant, CapabilityReceipt,
-    CapabilityReceiptInput, CapabilitySelector, DataClass, DecisionResult, PolicyDecision,
-    ResourceKind, RiskClass, SideEffectClass, TaintLabel,
+    ActionKind, ActionManifest, Budget, CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput,
+    CapabilitySelector, DataClass, DecisionResult, PolicyDecision, ResourceKind, RiskClass,
+    SideEffectClass, TaintLabel,
 };
 use beater_os_sandbox::{
-    SandboxLimits, SandboxOutcome, SandboxRequest, SandboxStatus, execute as sandbox_execute,
-    resolve_confined,
+    execute as sandbox_execute, resolve_confined, SandboxLimits, SandboxOutcome, SandboxRequest,
+    SandboxStatus,
 };
 use beater_os_tool_registry::{ResolveRequest, ToolRegistry};
 use beater_osd::{DaemonError, Store};
@@ -51,11 +51,10 @@ pub fn local_shell_tool_digest(
     args: &[String],
 ) -> GatewayResult<String> {
     let executable = resolve_executable_path(cwd.as_ref(), command)?;
-    let executable_bytes =
-        fs::read(&executable).map_err(|source| GatewayError::ToolDigestIo {
-            command: command.to_string(),
-            source,
-        })?;
+    let executable_bytes = fs::read(&executable).map_err(|source| GatewayError::ToolDigestIo {
+        command: command.to_string(),
+        source,
+    })?;
     let executable_digest = Sha256::digest(&executable_bytes);
     let mut digest = Sha256::new();
     digest.update(LOCAL_SHELL_DIGEST_VERSION.as_bytes());
@@ -165,8 +164,7 @@ pub fn execute_local_tool(
         });
     }
     let tool = registry.resolve(
-        &resolve_request(&invocation)
-            .in_workspace(projection.session.workspace_id.clone()),
+        &resolve_request(&invocation).in_workspace(projection.session.workspace_id.clone()),
     )?;
     if tool.manifest.transport != "local_shell" {
         return Err(GatewayError::UnsupportedTransport {
@@ -246,10 +244,8 @@ pub fn execute_local_tool(
         });
     }
 
-    let (receipt, execution) = store.execute_and_append_receipt(
-        &invocation.session_id,
-        Utc::now(),
-        |_| {
+    let (receipt, execution) =
+        store.execute_and_append_receipt(&invocation.session_id, Utc::now(), |_| {
             let execution = sandbox_execute(&SandboxRequest {
                 command: invocation.command.clone(),
                 args: invocation.args.clone(),
@@ -271,7 +267,8 @@ pub fn execute_local_tool(
             if observed_undeclared.len() != observed_effects.len() {
                 return Err(GatewayError::ObservedUndeclaredSideEffect);
             }
-            let certified_effects: Vec<SideEffectClass> = observed_effects.iter().cloned().collect();
+            let certified_effects: Vec<SideEffectClass> =
+                observed_effects.iter().cloned().collect();
             let side_effect_summary =
                 side_effect_summary(&execution, &observed_effects, &expected_side_effects);
             let artifact_refs: Vec<String> = execution
@@ -309,8 +306,7 @@ pub fn execute_local_tool(
                 },
                 execution,
             ))
-        },
-    )?;
+        })?;
 
     Ok(GatewayOutcome {
         decision,

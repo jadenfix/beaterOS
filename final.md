@@ -4,6 +4,12 @@ Date: 2026-07-03
 
 Status: research plan is being translated into executable engineering gates and matrix-backed acceptance criteria in beaterOS.
 
+Invariant: this document remains the durable source of truth for the agent-runtime-first path into metal-touching systems engineering.
+
+Execution rule: implementation slices may add concrete gates, repo maps, runtime contracts, and readiness matrices, but they must not weaken the long-horizon OS objective.
+
+Current emphasis: build the hosted agent kernel and its evidence-producing runtime boundaries first, then promote measured hot paths toward kernel, device, accelerator, and bare-metal lanes when the evidence justifies that move.
+
 ## 1a. Current Execution Slice (beaterOS bare-metal buildout)
 
 The current active work is converting the metal-lane contract into enforced infrastructure:

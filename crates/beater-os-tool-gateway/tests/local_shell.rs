@@ -11,12 +11,12 @@ use beater_os_core::{
 };
 use beater_os_sandbox::SandboxLimits;
 use beater_os_tool_gateway::{
-    GatewayError, LocalToolInvocation, execute_local_tool, local_shell_tool_digest,
+    execute_local_tool, local_shell_tool_digest, GatewayError, LocalToolInvocation,
 };
 use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
 };
-use beater_osd::{DAEMON_POLICY_VERSION, Store};
+use beater_osd::{Store, DAEMON_POLICY_VERSION};
 use chrono::{TimeDelta, Utc};
 use uuid::Uuid;
 
@@ -217,7 +217,10 @@ fn gateway_executes_registered_local_shell_tool_and_records_receipt() {
     )
     .unwrap();
 
-    assert_eq!(outcome.decision.result, beater_os_core::DecisionResult::Allowed);
+    assert_eq!(
+        outcome.decision.result,
+        beater_os_core::DecisionResult::Allowed
+    );
     assert!(outcome.execution.is_some());
     let receipt = outcome.receipt.as_ref().expect("receipt");
     assert!(receipt.tool_id.starts_with("tool:shell@1.0.0#"));
@@ -306,7 +309,9 @@ fn gateway_receipt_records_observed_not_declared_side_effects() {
 
     let receipt = outcome.receipt.as_ref().expect("receipt");
     assert!(receipt.side_effects.is_empty());
-    assert!(receipt.side_effect_summary.contains("declared_not_observed"));
+    assert!(receipt
+        .side_effect_summary
+        .contains("declared_not_observed"));
 }
 
 #[test]

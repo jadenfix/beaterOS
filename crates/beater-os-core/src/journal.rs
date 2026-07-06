@@ -4,11 +4,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
-    ActionManifest, AgentSession, ApprovalEvidence, CapabilityGrant, DecisionResult,
-    MemoryRecord, PaymentMandate, PolicyDecision, ScenarioManifest, SimulationEvidence,
+    ActionManifest, AgentSession, ApprovalEvidence, CapabilityGrant, DecisionResult, MemoryRecord,
+    PaymentMandate, PolicyDecision, ScenarioManifest, SimulationEvidence,
 };
 use crate::error::{BeaterOsError, BeaterOsResult};
-use crate::hash::{GENESIS_HASH, HashValue, hash_json};
+use crate::hash::{hash_json, HashValue, GENESIS_HASH};
 use crate::receipt::{CapabilityReceipt, ReceiptLedger};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,7 +254,10 @@ fn verify_event_causality(
             if review_ids.insert(approval.review_id.clone(), ()).is_some() {
                 return causality_error(
                     record.seq,
-                    format!("approval {} was recorded more than once", approval.review_id),
+                    format!(
+                        "approval {} was recorded more than once",
+                        approval.review_id
+                    ),
                 );
             }
             let Some(manifest) = proposed_actions.get(&approval.action_id) else {

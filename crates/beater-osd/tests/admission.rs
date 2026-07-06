@@ -9,10 +9,9 @@ use std::thread;
 use std::time::Duration;
 
 use beater_os_core::{
-    ActionKind, ActionManifest, AgentSession, ApprovalEvidence, ApprovalMode,
-    ApprovalRequirement, Budget, CapabilityGrant, CapabilityReceiptInput, CapabilityScope,
-    CapabilitySelector, DataClass, DecisionResult, DelegationMode, GrantConstraints, JournalEvent,
-    PaymentIntent,
+    ActionKind, ActionManifest, AgentSession, ApprovalEvidence, ApprovalMode, ApprovalRequirement,
+    Budget, CapabilityGrant, CapabilityReceiptInput, CapabilityScope, CapabilitySelector,
+    DataClass, DecisionResult, DelegationMode, GrantConstraints, JournalEvent, PaymentIntent,
     PaymentMandate, PolicyDecision, ResourceKind, RiskClass, SessionStatus, SideEffectClass,
     SimulationEvidence,
 };
@@ -205,7 +204,10 @@ fn simulation_for(manifest: &ActionManifest) -> SimulationEvidence {
         simulation_id: format!("sim-{}", manifest.action_id),
         action_id: manifest.action_id.clone(),
         manifest_hash: manifest.digest().unwrap(),
-        scenario_id: format!("action:{}:high-risk-side-effect-simulation", manifest.action_id),
+        scenario_id: format!(
+            "action:{}:high-risk-side-effect-simulation",
+            manifest.action_id
+        ),
         passed_at: Utc::now(),
         policy_version: "beateros-policy-v0".to_string(),
     }
@@ -382,11 +384,7 @@ fn paused_session_refuses_receipt_append_after_admission() {
         .unwrap();
     let before = store.load_journal(session_id).unwrap().records().len();
 
-    let result = store.append_receipt(
-        session_id,
-        receipt_input("act-receipt-paused"),
-        Utc::now(),
-    );
+    let result = store.append_receipt(session_id, receipt_input("act-receipt-paused"), Utc::now());
 
     assert!(
         matches!(result, Err(DaemonError::Refused(ref message)) if message.contains("not running")),
@@ -533,12 +531,10 @@ fn missing_grant_denies_without_execution_authority() {
         .unwrap();
 
     assert_eq!(outcome.decision.result, DecisionResult::Denied);
-    assert!(
-        outcome
-            .decision
-            .explanation
-            .contains("required grants are missing")
-    );
+    assert!(outcome
+        .decision
+        .explanation
+        .contains("required grants are missing"));
     store
         .load_journal(session_id)
         .unwrap()
@@ -565,12 +561,10 @@ fn issued_payment_mandate_is_projected_into_admission() {
         .admit_action(session_id, payment_manifest(session_id, "act-pay"))
         .unwrap();
     assert_ne!(outcome.decision.result, DecisionResult::Denied);
-    assert!(
-        outcome
-            .decision
-            .matched_rules
-            .contains(&"payment_authorized_by_mandate".to_string())
-    );
+    assert!(outcome
+        .decision
+        .matched_rules
+        .contains(&"payment_authorized_by_mandate".to_string()));
 }
 
 #[test]
@@ -599,8 +593,11 @@ fn durable_approval_and_simulation_evidence_allows_high_risk_action() {
 
 #[test]
 fn simulation_evidence_must_match_latest_required_simulation() {
-    let (_root, store) =
-        create_store_with_initial("simulation-requirement", "sess_sim_requirement", ["grant-deploy"]);
+    let (_root, store) = create_store_with_initial(
+        "simulation-requirement",
+        "sess_sim_requirement",
+        ["grant-deploy"],
+    );
     let session_id = "sess_sim_requirement";
     append_grant(&store, session_id, deploy_grant(session_id));
     let manifest = deploy_manifest(session_id, "act-sim-requirement");
@@ -658,12 +655,10 @@ fn expired_grant_denies_without_execution_authority() {
         .unwrap();
 
     assert_eq!(outcome.decision.result, DecisionResult::Denied);
-    assert!(
-        outcome
-            .decision
-            .explanation
-            .contains("delegation ancestors is revoked, expired, or missing")
-    );
+    assert!(outcome
+        .decision
+        .explanation
+        .contains("delegation ancestors is revoked, expired, or missing"));
 }
 
 #[test]
@@ -679,12 +674,10 @@ fn revoked_grant_denies_without_execution_authority() {
         .unwrap();
 
     assert_eq!(outcome.decision.result, DecisionResult::Denied);
-    assert!(
-        outcome
-            .decision
-            .explanation
-            .contains("delegation ancestors is revoked, expired, or missing")
-    );
+    assert!(outcome
+        .decision
+        .explanation
+        .contains("delegation ancestors is revoked, expired, or missing"));
 }
 
 #[test]
@@ -728,7 +721,9 @@ fn raw_grants_and_proposals_are_refused_by_public_append_event() {
     let session_id = "sess_raw_authority";
 
     let mut rewritten = session(&TempDir::new("unused-session-builder"), session_id);
-    rewritten.initial_capability_ids.insert("grant-extra".to_string());
+    rewritten
+        .initial_capability_ids
+        .insert("grant-extra".to_string());
     let raw_session = store.append_event(
         session_id,
         JournalEvent::SessionCreated { session: rewritten },
@@ -785,7 +780,10 @@ fn tampered_lifecycle_snapshot_cannot_rewrite_root_authority() {
     };
     rewritten.status = SessionStatus::Paused;
     let record = journal
-        .append(JournalEvent::SessionCreated { session: rewritten }, Utc::now())
+        .append(
+            JournalEvent::SessionCreated { session: rewritten },
+            Utc::now(),
+        )
         .unwrap();
     let journal_path = root
         .path
@@ -831,7 +829,10 @@ fn paused_session_refuses_new_grants_and_action_admission() {
     assert!(
         matches!(admission_result, Err(DaemonError::Refused(message)) if message.contains("not running"))
     );
-    assert_eq!(store.project(session_id).unwrap().session.status, SessionStatus::Paused);
+    assert_eq!(
+        store.project(session_id).unwrap().session.status,
+        SessionStatus::Paused
+    );
 }
 
 #[test]
@@ -851,7 +852,10 @@ fn resumed_session_can_receive_authority_again() {
         .unwrap();
 
     assert_eq!(outcome.decision.result, DecisionResult::Allowed);
-    assert_eq!(store.project(session_id).unwrap().session.status, SessionStatus::Running);
+    assert_eq!(
+        store.project(session_id).unwrap().session.status,
+        SessionStatus::Running
+    );
 }
 
 #[test]

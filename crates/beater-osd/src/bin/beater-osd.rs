@@ -20,8 +20,8 @@ use std::process::ExitCode;
 
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityReceiptInput,
-    CapabilityScope, CapabilitySelector, DataClass, DecisionResult, DelegationMode, GrantConstraints,
-    PolicyDecision, ResourceKind, RiskClass, SideEffectClass, SessionStatus,
+    CapabilityScope, CapabilitySelector, DataClass, DecisionResult, DelegationMode,
+    GrantConstraints, PolicyDecision, ResourceKind, RiskClass, SessionStatus, SideEffectClass,
 };
 use beater_osd::{DaemonError, Store, DAEMON_POLICY_VERSION};
 use chrono::{Duration, TimeDelta, Utc};
@@ -106,17 +106,21 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
     println!("  journal records: {}", report.journal_records);
     println!(
         "  projection: grants={}, manifests={}, receipts={}",
-        report.projected_grants,
-        report.projected_manifests,
-        report.projected_receipts,
+        report.projected_grants, report.projected_manifests, report.projected_receipts,
     );
     println!("  store root: {}", report.store_root);
-    println!("  receipt: {} (seq {})", report.receipt_id, report.receipt_seq);
+    println!(
+        "  receipt: {} (seq {})",
+        report.receipt_id, report.receipt_seq
+    );
 
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_runtime_smoke(root: PathBuf, session_id_override: Option<String>) -> Result<RuntimeSmokeReport, String> {
+fn run_runtime_smoke(
+    root: PathBuf,
+    session_id_override: Option<String>,
+) -> Result<RuntimeSmokeReport, String> {
     let session_id = session_id_override.unwrap_or_else(|| {
         format!(
             "{DEFAULT_BOOTSTRAP_SESSION_ID}-{}-{}",
@@ -202,7 +206,11 @@ fn run_runtime_smoke(root: PathBuf, session_id_override: Option<String>) -> Resu
     })
 }
 
-fn build_bootstrap_session(session_id: &str, root: &Path, created_at: chrono::DateTime<Utc>) -> AgentSession {
+fn build_bootstrap_session(
+    session_id: &str,
+    root: &Path,
+    created_at: chrono::DateTime<Utc>,
+) -> AgentSession {
     AgentSession {
         session_id: session_id.to_string(),
         created_at,
@@ -276,7 +284,8 @@ fn build_bootstrap_manifest(session_id: &str, now: chrono::DateTime<Utc>) -> Act
         idempotency_key: Some(format!("bootstrap-{session_id}-{}", now.timestamp())),
         payment_intent: None,
         compensation_plan: None,
-        human_explanation: "Bootstrapping runtime authority boundary for local agent kernel".to_string(),
+        human_explanation: "Bootstrapping runtime authority boundary for local agent kernel"
+            .to_string(),
     }
 }
 
@@ -299,10 +308,7 @@ fn build_bootstrap_receipt_input(manifest: &ActionManifest) -> CapabilityReceipt
     }
 }
 
-fn ensure_decision_allowed(
-    decision: &PolicyDecision,
-    manifest_hash: &str,
-) -> Result<(), String> {
+fn ensure_decision_allowed(decision: &PolicyDecision, manifest_hash: &str) -> Result<(), String> {
     if decision.result != DecisionResult::Allowed {
         return Err(format!(
             "runtime admission denied: {} (manifest_hash={manifest_hash})",
@@ -371,9 +377,7 @@ fn parse_cli(args: &[String]) -> Result<Cli, String> {
                 return Err(format!("unsupported option: {value}"));
             }
             other => {
-                return Err(format!(
-                    "unsupported positional argument: {other}\n{USAGE}"
-                ));
+                return Err(format!("unsupported positional argument: {other}\n{USAGE}"));
             }
         }
     }

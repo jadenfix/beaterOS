@@ -12,9 +12,9 @@ mod args;
 mod commands;
 mod error;
 
+pub use beater_osd::{SessionProjection, Store};
 pub use commands::POLICY_VERSION;
 pub use error::{CliError, CliResult};
-pub use beater_osd::{SessionProjection, Store};
 
 use std::env;
 use std::path::PathBuf;

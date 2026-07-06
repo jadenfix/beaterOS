@@ -202,7 +202,8 @@ impl Store {
         self.with_session_lock(session_id, || {
             let mut journal = self.load_journal_unlocked(session_id)?;
             let mut projection = self.project_unlocked(session_id)?;
-            projection.session.status = next_session_status(transition, &projection.session.status)?;
+            projection.session.status =
+                next_session_status(transition, &projection.session.status)?;
             let record = journal.append(
                 JournalEvent::SessionCreated {
                     session: projection.session,
@@ -524,7 +525,10 @@ impl Store {
         let mut ledger = self
             .receipt_ledger_from_journal_unlocked(session_id)
             .map_err(E::from)?;
-        let receipt = ledger.append(input).map_err(DaemonError::from).map_err(E::from)?;
+        let receipt = ledger
+            .append(input)
+            .map_err(DaemonError::from)
+            .map_err(E::from)?;
         self.append_event_unlocked(
             session_id,
             JournalEvent::ReceiptAppended {
@@ -920,9 +924,7 @@ fn admission_state_from_journal(
                 latest_decisions.insert(decision.action_id.clone(), decision.clone());
             }
             JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
-            JournalEvent::SimulationRecorded { simulation } => {
-                simulations.push(simulation.clone())
-            }
+            JournalEvent::SimulationRecorded { simulation } => simulations.push(simulation.clone()),
             JournalEvent::ReceiptAppended { .. }
             | JournalEvent::MemoryWritten { .. }
             | JournalEvent::ScenarioEvaluated { .. }
