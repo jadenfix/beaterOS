@@ -11,6 +11,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use beater_os_core::{JournalEvent, JournalRecord};
 use beaterosctl::{CliError, run};
 use uuid::Uuid;
 
@@ -94,6 +95,18 @@ fn issue_grant(home: &str, session: &str, extra: &[&str]) -> String {
         .expect("grant id in output")
 }
 
+fn journal_records(home: &str, session: &str) -> Vec<JournalRecord> {
+    let journal = PathBuf::from(home)
+        .join("sessions")
+        .join(session)
+        .join("journal.jsonl");
+    fs::read_to_string(&journal)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<JournalRecord>(line).unwrap())
+        .collect()
+}
+
 #[test]
 fn execute_runs_for_real_and_records_a_filesystem_diff() {
     let home = TempDir::new("home");
@@ -152,6 +165,88 @@ fn execute_runs_for_real_and_records_a_filesystem_diff() {
     let verify = ok(&h, &["journal", "verify", "--session", session]);
     assert!(verify.contains("journal OK"), "{verify}");
     assert!(verify.contains("receipts:      1"), "{verify}");
+}
+
+#[test]
+fn symlinked_grant_prefix_and_cwd_are_compared_in_canonical_namespace() {
+    let home = TempDir::new("home");
+    let work = TempDir::new("work");
+    let alias_parent = TempDir::new("alias-parent");
+    let h = home.canonical();
+    let workdir = work.canonical();
+    let alias = alias_parent.path.join("work-alias");
+    std::os::unix::fs::symlink(&work.path, &alias).unwrap();
+    let alias_dir = alias.display().to_string();
+    let session = "sess-symlink-prefix";
+
+    create_session(&h, session);
+    let grant_id = issue_grant(
+        &h,
+        session,
+        &["--actions", "execute", "--path-prefix", &alias_dir],
+    );
+
+    let out = ok(
+        &h,
+        &[
+            "action",
+            "execute",
+            "--session",
+            session,
+            "--tool",
+            "shell",
+            "--command",
+            "sh",
+            "--arg",
+            "-c",
+            "--arg",
+            "printf ok > via_alias.txt",
+            "--cwd",
+            &alias_dir,
+            "--grants",
+            &grant_id,
+            "--side-effects",
+            "local_write",
+            "--action-id",
+            "act-symlink-prefix",
+        ],
+    );
+
+    assert!(out.contains("Allowed"), "action must be admitted:\n{out}");
+    assert!(
+        out.contains(&format!("resolved:    {workdir}")),
+        "resolved target must be canonical:\n{out}"
+    );
+    let created = PathBuf::from(&workdir).join("via_alias.txt");
+    assert!(created.is_file(), "command must write inside real workdir");
+    assert_eq!(fs::read_to_string(&created).unwrap(), "ok");
+    let proposed = journal_records(&h, session)
+        .into_iter()
+        .find_map(|record| match record.event {
+            JournalEvent::ActionProposed { manifest }
+                if manifest.action_id == "act-symlink-prefix" =>
+            {
+                Some(manifest)
+            }
+            _ => None,
+        })
+        .expect("action proposed event");
+    assert_eq!(proposed.target.resource_id, workdir.as_str());
+    assert_eq!(
+        proposed
+            .resolved_target
+            .as_ref()
+            .expect("resolved target")
+            .resource_id,
+        workdir.as_str()
+    );
+    let trace = ok(&h, &["trace", "show", "--session", session]);
+    assert!(
+        trace.contains(&format!("resolved: FilePath {workdir}")),
+        "{trace}"
+    );
+    let verify = ok(&h, &["journal", "verify", "--session", session]);
+    assert!(verify.contains("journal OK"), "{verify}");
 }
 
 #[test]

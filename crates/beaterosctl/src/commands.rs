@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::{Component, Path};
 
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityReceiptInput,
@@ -142,7 +143,12 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let projection = store.project(&session_id)?;
 
     let resource_kind: ResourceKind = args::require_enum(args, "resource-kind")?;
-    let resource_id = args.require("resource-id")?.to_string();
+    let raw_resource_id = args.require("resource-id")?;
+    let resource_id = if resource_kind == ResourceKind::FilePath && raw_resource_id != "*" {
+        canonicalize_file_authority_or_lexical("resource-id", raw_resource_id)?
+    } else {
+        raw_resource_id.to_string()
+    };
 
     let mut actions = BTreeSet::new();
     for token in args.csv("actions") {
@@ -163,7 +169,12 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             Some(args::parse_enum::<DataClass>("max-data-class", max_data)?);
     }
     for prefix in args.csv("path-prefix") {
-        constraints.path_prefixes.insert(prefix);
+        constraints
+            .path_prefixes
+            .insert(canonicalize_existing_file_authority(
+                "path-prefix",
+                &prefix,
+            )?);
     }
     for host in args.csv("network-allow") {
         constraints.network_allowlist.insert(host);
@@ -241,16 +252,22 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     };
     // `resolved_target` is a KERNEL-DERIVED field (final.md §7.4): the canonical,
     // symlink-resolved target must be computed by a mediation point (the sandbox
-    // / gateway lane), never inferred from the agent's own claimed path. The CLI
-    // is the agent surface, so it leaves `resolved_target` unset unless a real
-    // mediation point supplies one via `--resolved-target`. Consequently a
-    // path-prefix grant fails closed here (core's `path_constraints_allow`
-    // requires a resolved target) until the sandbox lane (slice 5) sets it —
-    // rather than admitting against the agent's unverified, un-canonicalized path.
+    // / gateway lane), never inferred from the agent's own claimed path. Raw
+    // non-execute proposals may include it as evidence, but core still requires
+    // the requested path to remain inside path-prefix grants so it cannot launder
+    // authority through a caller-claimed resolved path. Mediated Execute actions
+    // use `resolved_target` as authority because the sandbox lane derives it
+    // before admission.
     let resolved_target = args.get("resolved-target").map(|value| CapabilitySelector {
         resource_kind: target.resource_kind.clone(),
         resource_id: value.to_string(),
     });
+    if action_kind == ActionKind::Execute && resolved_target.is_some() {
+        return Err(CliError::Refused(
+            "raw execute proposals cannot supply --resolved-target; use action execute so the sandbox mediates the resolved target"
+                .to_string(),
+        ));
+    }
 
     let inputs_summary = args.get_or("summary", "").to_string();
     let inputs_digest = hash_json(&inputs_summary)?;
@@ -412,12 +429,13 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let resolved = beater_os_sandbox::resolve_confined(&cwd, &confinement_prefixes)?;
     let resolved_str = resolved.display().to_string();
 
-    // (2) Build the manifest. `target` is the requested cwd; `resolved_target` is
-    // the canonical path (kernel-derived, §7.4). inputs_digest binds command,
-    // args, and the explicit environment allowlist.
+    // (2) Build the manifest. The sandbox has already mediated `--cwd`, so the
+    // manifest target is the canonical path used for authority. `resolved_target`
+    // duplicates the mediator-derived path as corroborating evidence for replay.
+    // inputs_digest binds command, args, and the explicit environment allowlist.
     let target = CapabilitySelector {
         resource_kind: ResourceKind::FilePath,
-        resource_id: cwd.clone(),
+        resource_id: resolved_str.clone(),
     };
     let resolved_target = Some(CapabilitySelector {
         resource_kind: ResourceKind::FilePath,
@@ -645,6 +663,50 @@ fn confinement_prefixes(
     prefixes.into_iter().collect()
 }
 
+/// Canonicalize file-path authority before it is written into a grant.
+///
+/// The sandbox resolves working directories and prefixes with `realpath`.
+/// Storing grant authority in the same namespace avoids false denials on macOS
+/// aliases such as `/var` -> `/private/var`, while still failing closed for
+/// relative paths and `..` components. Existing paths are stored in the
+/// canonical realpath namespace used by the sandbox; missing absolute paths are
+/// retained as lexical authority for compatibility with existing proposal flows.
+fn canonicalize_file_authority_or_lexical(field: &str, value: &str) -> CliResult<String> {
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::CurDir | Component::ParentDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(CliError::invalid(field, value));
+    }
+    match std::fs::canonicalize(path) {
+        Ok(canonical) => Ok(canonical.display().to_string()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(value.to_string()),
+        Err(err) => Err(CliError::Io(err)),
+    }
+}
+
+fn canonicalize_existing_file_authority(field: &str, value: &str) -> CliResult<String> {
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::CurDir | Component::ParentDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(CliError::invalid(field, value));
+    }
+    std::fs::canonicalize(path)
+        .map(|canonical| canonical.display().to_string())
+        .map_err(CliError::Io)
+}
+
 fn parse_env_assignment(raw: &str) -> CliResult<(String, String)> {
     let (name, value) = raw
         .split_once('=')
@@ -809,6 +871,12 @@ fn trace_show(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             manifest.target.resource_kind,
             manifest.target.resource_id
         ));
+        if let Some(resolved_target) = &manifest.resolved_target {
+            lines.push(format!(
+                "      resolved: {:?} {}",
+                resolved_target.resource_kind, resolved_target.resource_id
+            ));
+        }
         if let Some(decision) = projection.latest_decision(&manifest.action_id) {
             lines.push(format!(
                 "      decision: {:?} — {}",

@@ -25,7 +25,8 @@ use beater_os_core::{
     ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, CapabilityGrant,
     CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult, DelegationMode,
     InMemoryJournal, JournalEvent, JournalRecord, PaymentMandate, PolicyDecision, PolicyEngine,
-    ReceiptLedger, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, ToolManifest,
+    ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence,
+    ToolManifest,
 };
 use chrono::{DateTime, Utc};
 
@@ -421,6 +422,7 @@ impl Store {
                     grant.grant_id
                 )));
             }
+            let grant = normalize_grant_file_authority(grant)?;
             validate_grant_authority(&admission_state, &grant)?;
             let record = journal.append(JournalEvent::CapabilityGranted { grant }, created_at)?;
             journal.verify_chain()?;
@@ -1161,6 +1163,64 @@ fn validate_grant_authority(state: &AdmissionState, grant: &CapabilityGrant) -> 
                 grant.grant_id, grant.issuer, state.session.created_by
             )));
         }
+    }
+    Ok(())
+}
+
+fn normalize_grant_file_authority(mut grant: CapabilityGrant) -> DaemonResult<CapabilityGrant> {
+    if grant.scope.selector.resource_kind == ResourceKind::FilePath
+        && grant.scope.selector.resource_id != "*"
+    {
+        grant.scope.selector.resource_id = canonical_existing_file_authority_or_lexical(
+            "resource-id",
+            &grant.scope.selector.resource_id,
+        )?;
+    }
+    let mut normalized_prefixes = BTreeSet::new();
+    for prefix in &grant.constraints.path_prefixes {
+        normalized_prefixes.insert(canonical_existing_file_authority("path-prefix", prefix)?);
+    }
+    grant.constraints.path_prefixes = normalized_prefixes;
+    Ok(grant)
+}
+
+fn canonical_existing_file_authority_or_lexical(field: &str, value: &str) -> DaemonResult<String> {
+    validate_absolute_lexical_file_authority(field, value)?;
+    match fs::canonicalize(Path::new(value)) {
+        Ok(canonical) => Ok(canonical.display().to_string()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(value.to_string()),
+        Err(err) => Err(DaemonError::Refused(format!(
+            "file grant {field} {value:?} cannot be canonicalized: {err}"
+        ))),
+    }
+}
+
+fn canonical_existing_file_authority(field: &str, value: &str) -> DaemonResult<String> {
+    validate_absolute_lexical_file_authority(field, value)?;
+    fs::canonicalize(Path::new(value))
+        .map(|canonical| canonical.display().to_string())
+        .map_err(|err| {
+            DaemonError::Refused(format!(
+                "file grant {field} {value:?} cannot be canonicalized: {err}"
+            ))
+        })
+}
+
+fn validate_absolute_lexical_file_authority(field: &str, value: &str) -> DaemonResult<()> {
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir
+                    | std::path::Component::ParentDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Err(DaemonError::Refused(format!(
+            "file grant {field} {value:?} must be an absolute canonical path"
+        )));
     }
     Ok(())
 }

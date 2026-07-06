@@ -986,6 +986,25 @@ fn delegated_grant_cannot_broaden_parent() {
 }
 
 #[test]
+fn missing_path_prefix_grant_is_refused_before_append() {
+    let (root, store) = create_store_with_session("grant-missing-prefix", "sess_missing_prefix");
+    let session_id = "sess_missing_prefix";
+    let mut file_grant = grant(session_id);
+    file_grant.scope.selector.resource_id = "*".to_string();
+    file_grant
+        .constraints
+        .path_prefixes
+        .insert(root.path.join("missing-prefix").display().to_string());
+
+    let result = store.issue_grant(session_id, file_grant, Utc::now());
+
+    assert!(
+        matches!(result, Err(DaemonError::Refused(message)) if message.contains("cannot be canonicalized"))
+    );
+    assert_eq!(store.project(session_id).unwrap().grants.len(), 0);
+}
+
+#[test]
 fn proposal_only_recovery_completes_matching_action() {
     let (root, store) = create_store_with_session("admit-recover", "sess_recover");
     let session_id = "sess_recover";
