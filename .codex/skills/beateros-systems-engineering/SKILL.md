@@ -14,6 +14,8 @@ auditable evidence, and platform-aware implementation.
 For the full doctrine, read
 `docs/sota-systems-engineering.md` in the repository. Read `AGENTS.md` for the
 repo map and `final.md` when product intent or OS-level direction is unclear.
+For performance-sensitive work, language-boundary changes, accelerator paths, or
+optimization claims, also read `docs/optimization-agent-playbook.md`.
 
 ## Workflow
 
@@ -27,9 +29,14 @@ repo map and `final.md` when product intent or OS-level direction is unclear.
    - Name latency, allocation, copy, syscall, queue, and retry expectations.
    - Move audit explanation, diagnostics, summarization, and expensive
      formatting off the critical path unless they are required for safety.
+   - Classify the bottleneck before editing: contract work, algorithm, data
+     layout, copy/encoding, syscall/IO, concurrency, scheduler/platform,
+     accelerator, or provider/runtime.
 
 3. Choose the lowest-risk language boundary.
    - Use the best language for the subsystem and boundary.
+   - Verify current compiler/runtime facts from primary sources when the change
+     makes a language, compiler, or performance claim.
    - When tradeoffs are close, prefer Rust.
    - Use C for ABI, boot/platform, driver, hypervisor, sandbox, existing C
      library, or measured hot-path interop needs.
@@ -62,6 +69,9 @@ repo map and `final.md` when product intent or OS-level direction is unclear.
 - Use bounded queues, structured concurrency, cancellation, and backpressure.
 - Keep hot records compact; move diagnostics, strings, and large blobs out of
   hot structs.
+- For accelerator paths, account for host-device copies, queue delay, model
+  residency, partitioning, precision, throttling, cancellation, telemetry, and
+  fallback routes.
 - Add a benchmark, trace, property test, scenario, or CI gate for every serious
   performance or safety claim.
 
@@ -80,3 +90,6 @@ repo map and `final.md` when product intent or OS-level direction is unclear.
 
 - `references/review-checklist.md`: use for PR review and design review.
 - Repository `docs/sota-systems-engineering.md`: full doctrine.
+- Repository `docs/optimization-agent-playbook.md`: optimization workflow,
+  bottleneck taxonomy, language/toolchain discipline, and accelerator review
+  packet.
