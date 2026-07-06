@@ -343,9 +343,9 @@ const DEFAULT_EXECUTE_TIMEOUT_SECS: u64 = 30;
 ///    filesystem authority, yielding the kernel-derived `resolved_target`
 ///    (§7.4). A symlink escape or missing confinement aborts before anything is
 ///    journaled or executed.
-/// 2. Build the `ActionManifest` (`action_kind = Execute`) and run
-///    [`PolicyEngine::admit`] — no admission logic lives in the CLI.
-/// 3. Journal `ActionProposed` + `PolicyDecided`.
+/// 2. Build the `ActionManifest` (`action_kind = Execute`) and ask the daemon
+///    store to admit it — no admission logic lives in the CLI.
+/// 3. The daemon journals `ActionProposed` + `PolicyDecided`.
 /// 4. **Only if `Allowed`**, execute in the sandbox, build a `CapabilityReceipt`
 ///    (input digest = command+args, output digest = captured stdout, side-effect
 ///    summary = the filesystem diff), journal `ReceiptAppended`, and persist it.
