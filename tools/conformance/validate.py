@@ -56,6 +56,40 @@ def _validate_schema(rep: Report, reg, instance, schema_file, label) -> bool:
     return not errors
 
 
+RESERVING_PAYMENT_RESULTS = {"allowed", "needs_approval", "needs_simulation"}
+
+
+def _is_payment_manifest(manifest: dict) -> bool:
+    return (
+        manifest.get("action_kind") == "spend"
+        or "payment" in manifest.get("expected_side_effects", [])
+    )
+
+
+def _payment_reserved_by_mandate(
+    prior_decisions: list[dict],
+    manifests: dict[str, dict],
+    excluded_action_id: str,
+) -> dict[str, int]:
+    reserved: dict[str, int] = {}
+    for decision in prior_decisions:
+        if decision.get("result") not in RESERVING_PAYMENT_RESULTS:
+            continue
+        action_id = decision.get("action_id")
+        if action_id == excluded_action_id:
+            continue
+        manifest = manifests.get(action_id)
+        if manifest is None or not _is_payment_manifest(manifest):
+            continue
+        intent = manifest.get("payment_intent") or {}
+        mandate_id = intent.get("mandate_id")
+        amount = intent.get("amount_minor_units")
+        if not mandate_id or not isinstance(amount, int):
+            continue
+        reserved[mandate_id] = reserved.get(mandate_id, 0) + amount
+    return reserved
+
+
 # --- trace bundles --------------------------------------------------------
 
 
@@ -72,7 +106,8 @@ def check_trace_bundle(rep: Report, reg, path: Path) -> None:
     rep.add_errors(f"trace {name} journal-chain", journalcheck.verify_journal_chain(bundle.get("journal", [])))
 
     # Independent admission: each decision must match a re-derived admit().
-    for decision in bundle.get("decisions", []):
+    decisions = bundle.get("decisions", [])
+    for index, decision in enumerate(decisions):
         aid = decision["action_id"]
         manifest = manifests.get(aid)
         if manifest is None:
@@ -99,6 +134,11 @@ def check_trace_bundle(rep: Report, reg, path: Path) -> None:
             "approvals": bundle.get("approvals", []),
             "simulations": bundle.get("simulations", []),
             "mandates": bundle.get("payment_mandates", []),
+            "payment_reserved_by_mandate": _payment_reserved_by_mandate(
+                decisions[:index],
+                manifests,
+                aid,
+            ),
         }
         got = admission.admit(manifest, ctx)
         rep.check(
@@ -127,6 +167,8 @@ def check_scenario(rep: Report, reg, path: Path) -> None:
     ctx.setdefault("grants", [])
     ctx.setdefault("approvals", [])
     ctx.setdefault("simulations", [])
+    ctx.setdefault("mandates", [])
+    ctx.setdefault("payment_reserved_by_mandate", {})
     got = admission.admit(probe["manifest"], ctx)
 
     rep.check(

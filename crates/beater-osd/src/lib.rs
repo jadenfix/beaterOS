@@ -22,7 +22,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use beater_os_core::{
-    ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, CapabilityGrant,
+    ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, CapabilityGrant,
     CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult, DelegationMode,
     HashValue, InMemoryJournal, JournalEvent, JournalRecord, PaymentMandate, PolicyDecision,
     PolicyEngine, ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass,
@@ -713,6 +713,10 @@ impl Store {
             }
 
             let now = Utc::now();
+            let payment_reserved_by_mandate = payment_reserved_by_mandate_excluding(
+                &admission_state,
+                manifest.action_id.as_str(),
+            );
             let mut revoked_handles = admission_state.revoked_handles;
             revoked_handles.extend(external_revoked_handles);
             let ctx = AdmissionContext {
@@ -724,6 +728,7 @@ impl Store {
                 approvals: admission_state.approvals,
                 simulations: admission_state.simulations,
                 mandates: admission_state.mandates.into_values().collect(),
+                payment_reserved_by_mandate,
                 revoked_handles,
                 tool_registry: self.options.tool_registry.clone(),
                 require_registered_tools: self.options.require_registered_tools,
@@ -1205,6 +1210,7 @@ struct AdmissionState {
     issued_revocation_handles: BTreeSet<String>,
     event_ids: BTreeSet<String>,
     mandates: BTreeMap<String, PaymentMandate>,
+    payment_reserved_by_mandate: BTreeMap<String, u64>,
     proposals: BTreeMap<String, ProposedAction>,
     latest_decisions: BTreeMap<String, PolicyDecision>,
     approvals: Vec<ApprovalEvidence>,
@@ -1226,6 +1232,7 @@ fn admission_state_from_journal(
     let mut issued_revocation_handles = BTreeSet::new();
     let mut event_ids = BTreeSet::new();
     let mut mandates = BTreeMap::new();
+    let mut payment_reserved_by_mandate = BTreeMap::new();
     let mut proposals = BTreeMap::new();
     let mut latest_decisions = BTreeMap::new();
     let mut approvals = Vec::new();
@@ -1320,6 +1327,25 @@ fn admission_state_from_journal(
             "session {session_id} journal has no SessionCreated event"
         ))
     })?;
+    for (action_id, decision) in &latest_decisions {
+        if !reserves_payment_capacity(decision.result.clone()) {
+            continue;
+        }
+        let Some(proposal) = proposals.get(action_id) else {
+            continue;
+        };
+        if !is_payment_manifest(&proposal.manifest) {
+            continue;
+        }
+        let Some(intent) = &proposal.manifest.payment_intent else {
+            continue;
+        };
+        let entry = payment_reserved_by_mandate
+            .entry(intent.mandate_id.clone())
+            .or_insert(0_u64);
+        *entry = entry.saturating_add(intent.amount_minor_units);
+    }
+
     Ok(AdmissionState {
         session,
         grants,
@@ -1327,11 +1353,54 @@ fn admission_state_from_journal(
         issued_revocation_handles,
         event_ids,
         mandates,
+        payment_reserved_by_mandate,
         proposals,
         latest_decisions,
         approvals,
         simulations,
     })
+}
+
+fn reserves_payment_capacity(result: beater_os_core::DecisionResult) -> bool {
+    matches!(
+        result,
+        beater_os_core::DecisionResult::Allowed
+            | beater_os_core::DecisionResult::NeedsApproval
+            | beater_os_core::DecisionResult::NeedsSimulation
+    )
+}
+
+fn payment_reserved_by_mandate_excluding(
+    state: &AdmissionState,
+    excluded_action_id: &str,
+) -> BTreeMap<String, u64> {
+    let mut reserved = state.payment_reserved_by_mandate.clone();
+    let Some(decision) = state.latest_decisions.get(excluded_action_id) else {
+        return reserved;
+    };
+    if !reserves_payment_capacity(decision.result.clone()) {
+        return reserved;
+    }
+    let Some(proposal) = state.proposals.get(excluded_action_id) else {
+        return reserved;
+    };
+    let Some(intent) = proposal.manifest.payment_intent.as_ref() else {
+        return reserved;
+    };
+    if let Some(entry) = reserved.get_mut(&intent.mandate_id) {
+        *entry = entry.saturating_sub(intent.amount_minor_units);
+        if *entry == 0 {
+            reserved.remove(&intent.mandate_id);
+        }
+    }
+    reserved
+}
+
+fn is_payment_manifest(manifest: &ActionManifest) -> bool {
+    manifest.action_kind == ActionKind::Spend
+        || manifest
+            .expected_side_effects
+            .contains(&SideEffectClass::Payment)
 }
 
 fn journal_event_id(event: &JournalEvent) -> Option<&str> {

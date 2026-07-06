@@ -41,4 +41,3 @@ runtime-first contracts stay intact.
 - Keep PR body aligned with `final.md` section references.
 - Ensure no runtime-critical claims are added to architecture without
   corresponding manifest/matrix evidence.
-
