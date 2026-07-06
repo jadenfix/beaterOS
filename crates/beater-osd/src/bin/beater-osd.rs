@@ -14,9 +14,13 @@
 //! surfaces) should extend this CLI surface, but this command exists to keep the
 //! runtime contract executable immediately.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration as StdDuration;
 
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityReceiptInput,
@@ -36,6 +40,9 @@ struct Cli {
     root: PathBuf,
     session_id: Option<String>,
     json: bool,
+    bind: String,
+    token_file: Option<PathBuf>,
+    once: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,10 +66,16 @@ beater-osd — runtime bootstrap surface for the beaterOS daemon
 
 USAGE:
     beater-osd [runtime-smoke] [--root <path>] [--session-id <id>] [--json]
+    beater-osd serve --root <path> --token-file <path> [--bind 127.0.0.1:8787] [--once]
 
 COMMANDS:
     runtime-smoke   Exercise the core daemon contract: session -> grant -> admit -> receipt
+    serve           Serve the loopback local control-plane API
 ";
+
+const DEFAULT_CONTROL_BIND: &str = "127.0.0.1:8787";
+const MAX_CONTROL_REQUEST_BYTES: usize = 8 * 1024;
+const MIN_CONTROL_TOKEN_BYTES: usize = 16;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -81,9 +94,17 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         println!("{USAGE}");
         return Ok(ExitCode::SUCCESS);
     }
+    if cli.command == "serve" {
+        let root = canonicalize_or_error(&cli.root)?;
+        let token_file = cli
+            .token_file
+            .as_ref()
+            .ok_or_else(|| "serve requires --token-file <path>".to_string())?;
+        return run_control_server(root, &cli.bind, token_file, cli.once);
+    }
     if cli.command != "runtime-smoke" {
         return Err(format!(
-            "{USAGE}unsupported command: {}\nexpected: runtime-smoke",
+            "{USAGE}unsupported command: {}\nexpected: runtime-smoke or serve",
             cli.command
         ));
     }
@@ -334,6 +355,239 @@ fn decision_result_to_string(result: &DecisionResult) -> &'static str {
     }
 }
 
+fn run_control_server(
+    root: PathBuf,
+    bind: &str,
+    token_file: &Path,
+    once: bool,
+) -> Result<ExitCode, String> {
+    let bind: SocketAddr = bind
+        .parse()
+        .map_err(|err| format!("invalid --bind address {bind:?}: {err}"))?;
+    if !bind.ip().is_loopback() {
+        return Err("serve refuses non-loopback bind addresses".to_string());
+    }
+    let token = load_control_token(token_file)?;
+    let store = Store::open(&root)
+        .map_err(|err| format!("unable to open runtime store at {}: {err}", root.display()))?;
+    let listener = TcpListener::bind(bind).map_err(|err| format!("bind {bind} failed: {err}"))?;
+    println!(
+        "beater-osd control API listening on {}",
+        listener.local_addr().map_err(|err| err.to_string())?
+    );
+
+    for stream in listener.incoming() {
+        let stream = stream.map_err(|err| format!("accept failed: {err}"))?;
+        if let Err(err) = handle_control_stream(stream, &store, &token) {
+            eprintln!("beater-osd control request refused: {err}");
+        }
+        if once {
+            break;
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn load_control_token(path: &Path) -> Result<String, String> {
+    let token = fs::read_to_string(path)
+        .map_err(|err| format!("could not read --token-file {}: {err}", path.display()))?
+        .trim()
+        .to_string();
+    if token.len() < MIN_CONTROL_TOKEN_BYTES || token.chars().any(char::is_whitespace) {
+        return Err(format!(
+            "control token in {} must be at least {MIN_CONTROL_TOKEN_BYTES} non-whitespace bytes",
+            path.display()
+        ));
+    }
+    Ok(token)
+}
+
+fn handle_control_stream(mut stream: TcpStream, store: &Store, token: &str) -> Result<(), String> {
+    stream
+        .set_read_timeout(Some(StdDuration::from_secs(2)))
+        .map_err(|err| err.to_string())?;
+    stream
+        .set_write_timeout(Some(StdDuration::from_secs(2)))
+        .map_err(|err| err.to_string())?;
+    let request = read_control_request(&mut stream)?;
+    let response = route_control_request(store, token, &request);
+    stream
+        .write_all(response.as_bytes())
+        .map_err(|err| format!("write response failed: {err}"))?;
+    Ok(())
+}
+
+fn read_control_request(stream: &mut TcpStream) -> Result<ControlRequest, String> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        let n = stream
+            .read(&mut chunk)
+            .map_err(|err| format!("read request failed: {err}"))?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..n]);
+        if bytes.len() > MAX_CONTROL_REQUEST_BYTES {
+            return Err("control request exceeded size cap".to_string());
+        }
+        if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| "request is not utf-8".to_string())?;
+    let (head, _) = text
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "request header terminator missing".to_string())?;
+    let mut lines = head.split("\r\n");
+    let request_line = lines
+        .next()
+        .ok_or_else(|| "missing request line".to_string())?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_string();
+    let path = parts.next().unwrap_or_default().to_string();
+    let version = parts.next().unwrap_or_default().to_string();
+    if parts.next().is_some() || method.is_empty() || path.is_empty() || version != "HTTP/1.1" {
+        return Err("malformed HTTP/1.1 request line".to_string());
+    }
+    let mut headers = BTreeMap::new();
+    for line in lines {
+        let (name, value) = line
+            .split_once(':')
+            .ok_or_else(|| format!("malformed header line {line:?}"))?;
+        headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+    }
+    Ok(ControlRequest {
+        method,
+        path,
+        headers,
+    })
+}
+
+fn route_control_request(store: &Store, token: &str, request: &ControlRequest) -> String {
+    let (status, body) = match authorize_control_request(token, request) {
+        Ok(()) => handle_authorized_control_request(store, request),
+        Err(response) => response,
+    };
+    control_response(status, body)
+}
+
+fn authorize_control_request(token: &str, request: &ControlRequest) -> Result<(), (u16, String)> {
+    if request.method != "GET" {
+        return Err((
+            405,
+            json_error("method_not_allowed", "only GET is supported"),
+        ));
+    }
+    let host = request
+        .headers
+        .get("host")
+        .map(String::as_str)
+        .unwrap_or("");
+    if !host_allowed(host) {
+        return Err((403, json_error("bad_host", "Host must be loopback")));
+    }
+    if let Some(origin) = request.headers.get("origin")
+        && !origin_allowed(origin)
+    {
+        return Err((403, json_error("bad_origin", "Origin must be loopback")));
+    }
+    if path_without_query(&request.path) == "/healthz" {
+        return Ok(());
+    }
+    let expected = format!("Bearer {token}");
+    if request.headers.get("authorization") != Some(&expected) {
+        return Err((
+            401,
+            json_error("unauthorized", "missing or invalid bearer token"),
+        ));
+    }
+    Ok(())
+}
+
+fn handle_authorized_control_request(store: &Store, request: &ControlRequest) -> (u16, String) {
+    let path = path_without_query(&request.path);
+    match path {
+        "/healthz" => (200, serde_json::json!({ "status": "ok" }).to_string()),
+        "/v1/sessions" => match store.list_sessions() {
+            Ok(sessions) => (200, serde_json::json!({ "sessions": sessions }).to_string()),
+            Err(err) => (500, json_error("store_error", &err.to_string())),
+        },
+        path if path.starts_with("/v1/sessions/") => {
+            let session_id = path.trim_start_matches("/v1/sessions/");
+            match store.project(session_id) {
+                Ok(projection) => (
+                    200,
+                    serde_json::json!({
+                        "session_id": projection.session.session_id,
+                        "agent_id": projection.session.agent_id,
+                        "workspace_id": projection.session.workspace_id,
+                        "status": projection.session.status,
+                        "grants": projection.grants.len(),
+                        "actions": projection.manifests.len(),
+                        "decisions": projection.decisions.len(),
+                        "receipts": projection.receipts.len(),
+                    })
+                    .to_string(),
+                ),
+                Err(DaemonError::SessionNotFound(_)) => (
+                    404,
+                    json_error("session_not_found", "session does not exist"),
+                ),
+                Err(err) => (500, json_error("store_error", &err.to_string())),
+            }
+        }
+        _ => (404, json_error("not_found", "unknown control-plane route")),
+    }
+}
+
+fn control_response(status: u16, body: String) -> String {
+    let reason = match status {
+        200 => "OK",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        _ => "Internal Server Error",
+    };
+    format!(
+        "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncache-control: no-store\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+fn json_error(code: &str, message: &str) -> String {
+    serde_json::json!({ "error": { "code": code, "message": message } }).to_string()
+}
+
+fn path_without_query(path: &str) -> &str {
+    path.split_once('?').map(|(path, _)| path).unwrap_or(path)
+}
+
+fn host_allowed(host: &str) -> bool {
+    let host = host.trim();
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let without_port = host.rsplit_once(':').map(|(host, _)| host).unwrap_or(host);
+    matches!(without_port, "127.0.0.1" | "[::1]" | "localhost")
+}
+
+fn origin_allowed(origin: &str) -> bool {
+    let Some(rest) = origin.strip_prefix("http://") else {
+        return false;
+    };
+    let host = rest.split('/').next().unwrap_or_default();
+    host_allowed(host)
+}
+
+#[derive(Debug)]
+struct ControlRequest {
+    method: String,
+    path: String,
+    headers: BTreeMap<String, String>,
+}
+
 fn parse_cli(args: &[String]) -> Result<Cli, String> {
     let mut command = "runtime-smoke".to_string();
     let mut idx = 1;
@@ -348,6 +602,9 @@ fn parse_cli(args: &[String]) -> Result<Cli, String> {
         .unwrap_or_else(|_| PathBuf::from(".beaterosd"));
     let mut session_id = None;
     let mut json = false;
+    let mut bind = DEFAULT_CONTROL_BIND.to_string();
+    let mut token_file = None;
+    let mut once = false;
 
     while idx < args.len() {
         match args[idx].as_str() {
@@ -373,6 +630,24 @@ fn parse_cli(args: &[String]) -> Result<Cli, String> {
                 session_id = Some(value.to_string());
                 idx += 2;
             }
+            "--bind" => {
+                let Some(value) = args.get(idx + 1) else {
+                    return Err("--bind requires <addr:port>".to_string());
+                };
+                bind = value.to_string();
+                idx += 2;
+            }
+            "--token-file" => {
+                let Some(value) = args.get(idx + 1) else {
+                    return Err("--token-file requires <path>".to_string());
+                };
+                token_file = Some(PathBuf::from(value));
+                idx += 2;
+            }
+            "--once" => {
+                once = true;
+                idx += 1;
+            }
             value if value.starts_with('-') => {
                 return Err(format!("unsupported option: {value}"));
             }
@@ -387,6 +662,9 @@ fn parse_cli(args: &[String]) -> Result<Cli, String> {
         root,
         session_id,
         json,
+        bind,
+        token_file,
+        once,
     })
 }
 

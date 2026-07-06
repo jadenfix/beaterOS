@@ -14,6 +14,8 @@ review boundaries.
   - Session model and lifecycle semantics used by all upper layers.
 - `crates/beater-osd`
   - Runtime daemon store, admission boundary, projection, receipt append path.
+  - Local loopback control-plane API for health and token-gated session
+    projection.
   - Canonical proof of authority writes (`PolicyEngine` is only invocation point
     for admission decisions).
 - `crates/beaterosctl`
