@@ -930,7 +930,7 @@ fn tampered_journal_cannot_project_second_session_created_event() {
     let result = store.project(session_id);
 
     assert!(
-        matches!(result, Err(DaemonError::Refused(message)) if message.contains("SessionCreated for sess_other")),
+        matches!(result, Err(DaemonError::Refused(ref message)) if message.contains("SessionCreated for sess_other")),
         "{result:?}"
     );
 }
