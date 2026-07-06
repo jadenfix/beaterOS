@@ -4,7 +4,7 @@ use std::path::{Component, Path};
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityReceiptInput,
     CapabilityScope, CapabilitySelector, DataClass, DecisionResult, GrantConstraints, ResourceKind,
-    RiskClass, SessionStatus, SideEffectClass, ToolManifest, hash_json,
+    RiskClass, SessionStatus, SideEffectClass, hash_json,
 };
 use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environment};
 use beater_os_tool_gateway::{
