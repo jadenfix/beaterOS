@@ -35,6 +35,7 @@ class PlanTest(unittest.TestCase):
                         "docs/governance/coordination-ledger.md",
                     ),
                 ),
+                ("bare-metal-readiness", ("python3", "scripts/check-bare-metal-readiness.py")),
                 ("python-unit-tests", ("python3", "-m", "unittest", "discover", "-s", "tests")),
                 ("spec-conformance", ("python3", "spec/conformance/validate.py", "--quiet")),
                 ("conformance-selftest", ("python3", "tools/conformance/selftest.py")),

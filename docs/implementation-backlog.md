@@ -39,6 +39,7 @@ coordination artifact, not a replacement for `final.md`.
 | 16 | `codex/release-gates` | Make eval gates mandatory for beaterOS releases | smoke/core/security/cost/latency gates, incident replay hook | 7, 10, 11, 12 |
 | 17 | `codex/distribution-hardening` | Package local beaterOS runtime safely | installable local runtime, templates, signed release plan | 16 |
 | 18 | `codex/high-assurance-track` | Document and prototype high-assurance security path | formal invariants, crypto agility, TEE/PQC/seL4/CHERI notes | 1, 7 |
+| 19 | `codex/bare-metal-readiness-infra` | Add machine-class readiness manifest and readiness gate | readiness manifest schema, host matching checks, e2e integration, accelerator planning metadata | 1 |
 | A1 | `claude/multi-agent-pr-review-4cfv9t` | Add beater-os-audit independent verifier and trace viewer | offline independent journal/receipt re-verification, human-legible trace render, audit metrics, redaction-safe audit bundle, `beateros-audit` CLI | 1 |
 
 ## Cross-Agent Coordination Log
@@ -88,6 +89,9 @@ communication channel; live discussion happens on the PRs it references.
   `beaterosctl` crate (operator CLI) and the durable on-disk journal/receipt
   store. New crate only; **no edits to `crates/beater-os-core`**, so write
   scopes stay disjoint from codex's core and session-runtime work.
+- **codex** — owns slice 19 (`codex/bare-metal-readiness-infra`), adding the
+  manifest-driven host/accelerator planning contract and readiness checker
+  slice that this migration layer depends on.
 
 Boundary agreement (to keep slices 2 and 3 compatible):
 
