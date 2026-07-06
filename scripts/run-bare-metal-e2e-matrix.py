@@ -35,6 +35,8 @@ DEFAULT_MATRIX: list[dict[str, Any]] = [
             "arch": "x86_64",
             "cpu_cores": 8,
             "memory_gib": 16,
+            "storage_iops": 6000,
+            "residual_latency_ms": 120,
             "accelerators": ["cpu"],
         },
         "require_profile": "portable-host-control-plane",
@@ -51,6 +53,8 @@ DEFAULT_MATRIX: list[dict[str, Any]] = [
             "arch": "arm64",
             "cpu_cores": 8,
             "memory_gib": 12,
+            "storage_iops": 6000,
+            "residual_latency_ms": 120,
             "accelerators": ["cpu"],
         },
         "require_profile": "portable-host-control-plane",
@@ -67,8 +71,11 @@ DEFAULT_MATRIX: list[dict[str, Any]] = [
             "arch": "x86_64",
             "cpu_cores": 16,
             "memory_gib": 32,
+            "storage_iops": 12000,
+            "residual_latency_ms": 80,
             "accelerators": ["cpu", "cuda"],
             "gpu_mem_gib": 24,
+            "pcie_bwl_gbps": 24,
         },
         "require_profile": "linux-cuda-scored-host",
         "require_workload_routes": {
@@ -83,7 +90,10 @@ DEFAULT_MATRIX: list[dict[str, Any]] = [
             "arch": "arm64",
             "cpu_cores": 12,
             "memory_gib": 16,
+            "storage_iops": 12000,
+            "residual_latency_ms": 80,
             "memory_bandwidth_gbps": 80,
+            "gpu_temp_c": 70,
             "accelerators": ["cpu", "apple_gpu"],
         },
         "require_workload_routes": {
@@ -98,6 +108,8 @@ DEFAULT_MATRIX: list[dict[str, Any]] = [
             "arch": "x86_64",
             "cpu_cores": 4,
             "memory_gib": 4,
+            "storage_iops": 6000,
+            "residual_latency_ms": 120,
             "accelerators": ["cpu"],
         },
         "require_lane": "portable-control-plane",
@@ -113,11 +125,13 @@ DEFAULT_MATRIX: list[dict[str, Any]] = [
             "arch": "x86_64",
             "cpu_cores": 4,
             "memory_gib": 6,
+            "storage_iops": 6000,
+            "residual_latency_ms": 120,
             "accelerators": ["cpu", "cuda"],
         },
         "require_lane": "linux-cuda-lane",
         "expected_result": "fail",
-        "expected_failure_contains": "required lane is not runnable",
+        "expected_failure_contains": "required architecture lane is not runnable",
     },
 ]
 
@@ -349,6 +363,7 @@ def _run_case(case: dict[str, Any], manifest: dict[str, Any]) -> tuple[bool, str
                 ),
                 require_workload_classes=normalized.get("require_workload_classes"),
                 require_migration_phase=normalized.get("require_migration_phase"),
+                host_profile_is_authoritative=True,
             )
         output = capture.getvalue()
 
