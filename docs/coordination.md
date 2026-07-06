@@ -1,54 +1,48 @@
 # Work-Claiming Board
 
-The **collision-avoidance board** for the agents building beaterOS in parallel.
-Claim a disjoint write scope here *before* you build. This is the "journal
+The **collision-avoidance protocol** for the agents building beaterOS in
+parallel. Claim a disjoint write scope *before* you build. This is the "journal
 before side effects" of development (see `AGENTS.md` → Multi-Agent Contribution
 & Review Contract).
 
-**This is a claiming board, not a review ledger.** The canonical record of who
-*authored / reviewed / merged* each PR — and the `scripts/check-governance.py`
-linter over it — lives in
-[`docs/governance/coordination-ledger.md`](governance/coordination-ledger.md).
-Keep the two separate to avoid a second source of truth (`final.md` §22).
+**This is a protocol, not a live snapshot.** A hand-maintained per-PR table goes
+stale within hours on a fast-moving repo, so this file deliberately does **not**
+list every open PR. For live state, read the sources that update themselves:
 
-## Rules
+- **Who is building what right now** → the open pull requests
+  (`gh pr list` / the PRs tab). Each PR names its lane in its title/body.
+- **Who authored / reviewed / merged each PR** → the canonical audit ledger
+  [`docs/governance/coordination-ledger.md`](governance/coordination-ledger.md),
+  linted by `scripts/check-governance.py`.
+- **How work maps to `final.md`** → [`docs/implementation-backlog.md`](implementation-backlog.md).
 
-- **Claim before you build.** Add a row with a *disjoint write scope*.
-- **One active claim per branch.** Don't start if your scope overlaps an active
-  claim; pick another slice, narrow scope, or coordinate on the other agent's PR.
-- **Additive-first.** Prefer new files over editing shared ones (`AGENTS.md`,
-  `README.md`, `final.md`, `Cargo.*`, shared workflows) to reduce cross-agent
-  conflicts. If you must touch a shared file, keep the edit small and localized.
-- **Release the claim.** Delete the branch and drop your row after merge.
+This board owns only the *rules* for claiming a scope; it is **not** a second
+review ledger (`final.md` §22 — one source of truth per concern).
 
-Status: `claimed` → `in-progress` → `in-review` → `merged`/`dropped`.
+## How to claim a disjoint write scope
 
-## Active claims (open branches)
+1. **Pick a slice** from `docs/implementation-backlog.md` (or a tracked issue).
+2. **Scope your writes.** Decide the narrow set of files/paths you will touch.
+   Prefer *new files* over editing shared ones (`AGENTS.md`, `README.md`,
+   `final.md`, `Cargo.*`, shared workflows, `docs/governance/*`). If you must
+   touch a shared file, keep the edit small and localized.
+3. **Check for overlap** against the open PRs. If your write scope intersects an
+   open PR's, do **not** start — pick another slice, narrow your scope, or
+   coordinate on that PR's thread and let the earlier one merge, then rebase.
+4. **Announce the claim** by opening a **draft PR early** (per the fleet's
+   draft-first rule) with the agent-routing trailer filled in. The draft PR *is*
+   your claim — visible to every other agent without a table that rots.
+5. **Build small, review independently, merge by a non-author, then delete the
+   branch** — freeing your scope for the next agent.
 
-| Agent | Slice | Branch | Write scope | Status | PR |
-| --- | --- | --- | --- | --- | --- |
-| claude/iaxamo | Governance backbone (contract + CI + CODEOWNERS + claiming board) | `claude/multi-agent-pr-review-iaxamo` | `AGENTS.md` (governance section only), `CONTRIBUTING.md`, `docs/coordination.md`, `.github/CODEOWNERS`, `.github/workflows/pr-governance.yml` | in-review | #19 |
-| claude/nvl2yq | E2E audit + plan-hardening docs | `claude/repo-e2e-audit-nvl2yq` | `docs/design/**`, `docs/audit/**`, `docs/glossary.md` | in-review (draft) | #21 |
-| claude/qp5d8a | Phase-0 glossary + open questions | `claude/multi-agent-pr-review-qp5d8a` | `docs/glossary.md`, `docs/open-questions.md` | in-review | #24 |
-| claude/4cfv9t | `beater-os-audit` verifier crate | `claude/multi-agent-pr-review-4cfv9t` | `crates/beater-os-audit/**` | in-review | #27 |
-| claude/vzkjv1 | Grant-constraints fail-closed security fix | `claude/multi-agent-pr-review-vzkjv1` | `crates/beater-os-core/src/contracts.rs`, `crates/beater-os-core/tests/**` | in-review | #30 |
-| codex | Repo entrypoint + LICENSE + source audit | `codex/repo-entrypoint-source-audit` | `LICENSE`, `README.md`, `docs/source-matrix.md`, `AGENTS.md`/`CLAUDE.md` (lang policy) | in-review | #36 |
+## Merge routing under a shared agent-id
 
-> Overlap watch: #21 and #24 both touch `docs/glossary.md` — coordinate on those
-> threads before either merges (later one rebases). #19 and #36 both touch
-> `AGENTS.md`, but in disjoint regions (governance section vs language-policy
-> line); small, should auto-merge.
+`pr-governance.yml` keys its self-merge guard on the `Author-Agent` string, so a
+`claude`-merges-`claude` trips it even across genuinely distinct sessions
+(intentional). **Route merges to a distinct id:** `codex` or `human:@jadenfix`
+merges a `claude`-authored PR, and a `claude` merges a `codex`-authored one.
 
-## Coordination notes
+## If two claims must touch the same shared file
 
-- **Governance dedup (resolved).** The fleet converged: **#19** owns the
-  contribution backbone (`AGENTS.md` governance section, `CONTRIBUTING`,
-  `CODEOWNERS`, the CI workflow, this board); **#23** (merged) owns the review
-  gate (checklist + linter); **#22/#25** own the conformance suite + contract
-  spec. Duplicate governance PRs were dropped/closed (#20, and the governance
-  parts of #22/#24). `spec/COORDINATION.md` is a slice-scoped companion.
-- **Merge routing under a shared id.** `pr-governance.yml` keys its self-merge
-  guard on the `Author-Agent` string, so a `claude`-merges-`claude` trips it even
-  across distinct sessions (intentional). Route merges to a distinct id: `codex`
-  or `human:@jadenfix` merges `claude`-authored PRs, and a `claude` merges
-  `codex`-authored ones.
+The later agent waits for the earlier PR to merge, then rebases — rather than
+both editing it in parallel. Announce the dependency on both PR threads.
