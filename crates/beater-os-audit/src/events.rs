@@ -8,8 +8,11 @@ pub(crate) fn event_kind(event: &JournalEvent) -> &'static str {
     match event {
         JournalEvent::SessionCreated { .. } => "session_created",
         JournalEvent::CapabilityGranted { .. } => "capability_granted",
+        JournalEvent::PaymentMandateIssued { .. } => "payment_mandate_issued",
         JournalEvent::ActionProposed { .. } => "action_proposed",
         JournalEvent::PolicyDecided { .. } => "policy_decided",
+        JournalEvent::ApprovalRecorded { .. } => "approval_recorded",
+        JournalEvent::SimulationRecorded { .. } => "simulation_recorded",
         JournalEvent::ReceiptAppended { .. } => "receipt_appended",
         JournalEvent::MemoryWritten { .. } => "memory_written",
         JournalEvent::ScenarioEvaluated { .. } => "scenario_evaluated",
