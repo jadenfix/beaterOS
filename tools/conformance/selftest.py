@@ -208,6 +208,15 @@ def run() -> list[str]:
     expect(admission.admit(spend, no_mandate_ctx)["result"] == "denied",
            "missing payment mandate must hard-deny")
 
+    # 9. Payment mandates are cumulative, not per-action only. A prior
+    #    non-denied reservation must consume capacity before execution.
+    cumulative_ctx = {"now": "2026-07-03T00:30:00Z", "actor_id": "agent", "session_id": "S",
+                      "policy_version": "p", "grants": [grant], "approvals": [],
+                      "simulations": [], "mandates": [_payment_mandate()],
+                      "payment_reserved_by_mandate": {"m": 1000}}
+    expect(admission.admit(spend, cumulative_ctx)["result"] == "denied",
+           "cumulative payment reservation must hard-deny over the mandate ceiling")
+
     # 9. Untrusted-taint gate must reject an approval from an UNAUTHORIZED reviewer
     #    (not just any bound approval). Regression for the second review finding.
     unauth_spend = {

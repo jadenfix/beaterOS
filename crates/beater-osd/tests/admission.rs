@@ -639,6 +639,43 @@ fn issued_payment_mandate_is_projected_into_admission() {
 }
 
 #[test]
+fn non_denied_payment_decision_reserves_mandate_capacity_for_next_admission() {
+    let (_root, store) = create_store_with_initial(
+        "payment-cumulative-spend",
+        "sess_payment_meter",
+        ["grant-spend"],
+    );
+    let session_id = "sess_payment_meter";
+    store
+        .issue_grant(session_id, payment_grant(session_id), Utc::now())
+        .unwrap();
+    store
+        .issue_payment_mandate(session_id, payment_mandate(session_id), Utc::now())
+        .unwrap();
+
+    let first_outcome = store
+        .admit_action(session_id, payment_manifest(session_id, "act-pay-1"))
+        .unwrap();
+    assert_eq!(
+        first_outcome.decision.result,
+        DecisionResult::NeedsSimulation
+    );
+
+    let second_outcome = store
+        .admit_action(session_id, payment_manifest(session_id, "act-pay-2"))
+        .unwrap();
+    assert_eq!(second_outcome.decision.result, DecisionResult::Denied);
+    assert!(
+        second_outcome
+            .decision
+            .explanation
+            .contains("cumulative ceiling"),
+        "{}",
+        second_outcome.decision.explanation
+    );
+}
+
+#[test]
 fn unregistered_tool_denies_through_daemon_admission() {
     let (_root, store) = create_store_with_session("admit-unregistered", "sess_unregistered");
     let session_id = "sess_unregistered";
