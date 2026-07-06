@@ -57,9 +57,10 @@ list.
 `grant issue` generates a revocation handle by default and prints it with the
 grant. Operators can provide a stable handle with `--revocation-handle <h>`.
 `action propose` and `action execute` accept repeatable `--revoked-handle <h>`
-flags; those handles become the monotonic revocation registry in
-`AdmissionContext`, so a grant or delegated ancestor with a matching handle
-fails closed at admission.
+flags; those handles are passed to `beater-osd` as a per-admission revocation
+registry snapshot in `AdmissionContext`, so a grant or delegated ancestor with a
+matching handle fails closed at admission. Durable revocation-list storage is a
+separate runtime service; these flags are the replay/operator input surface.
 
 ## Worked MVP flow
 

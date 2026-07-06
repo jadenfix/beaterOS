@@ -636,7 +636,7 @@ fn action_propose_honors_revoked_handle_registry() {
             "--resource-id",
             "/repo/a",
             "--actions",
-            "read",
+            "write",
             "--revocation-handle",
             "revoke:repo-a",
         ],
@@ -660,9 +660,9 @@ fn action_propose_honors_revoked_handle_registry() {
             "--session",
             session,
             "--tool",
-            "fs.read",
+            "fs.write",
             "--kind",
-            "read",
+            "write",
             "--target-kind",
             "file_path",
             "--target",
@@ -683,9 +683,9 @@ fn action_propose_honors_revoked_handle_registry() {
             "--session",
             session,
             "--tool",
-            "fs.read",
+            "fs.write",
             "--kind",
-            "read",
+            "write",
             "--target-kind",
             "file_path",
             "--target",
@@ -706,6 +706,99 @@ fn action_propose_honors_revoked_handle_registry() {
         denied.contains("revoked, expired, or missing"),
         "denial should name the revoked authority boundary:\n{denied}"
     );
+}
+
+#[test]
+fn action_execute_honors_revoked_handle_before_sandbox_execution() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let repo = home.child_dir("repo");
+    let out_file = PathBuf::from(&repo).join("out.txt");
+    let session = "sess-execute-revoked-handle";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a",
+            "--workspace",
+            "w",
+            "--goal",
+            "g",
+        ],
+    );
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "*",
+            "--actions",
+            "execute,write",
+            "--path-prefix",
+            &repo,
+            "--revocation-handle",
+            "revoke:exec",
+        ],
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id");
+
+    let denied = ok(
+        &h,
+        &[
+            "action",
+            "execute",
+            "--session",
+            session,
+            "--tool",
+            "shell",
+            "--command",
+            "sh",
+            "--arg",
+            "-c",
+            "--arg",
+            "printf hi > out.txt",
+            "--cwd",
+            &repo,
+            "--grants",
+            &grant_id,
+            "--side-effects",
+            "local_write",
+            "--revoked-handle",
+            "revoke:exec",
+            "--action-id",
+            "act-exec-after-revoke",
+        ],
+    );
+
+    assert!(
+        denied.contains("Denied"),
+        "revoked execute grant must fail closed at admission:\n{denied}"
+    );
+    assert!(
+        denied.contains("execution:   skipped"),
+        "revoked action must not execute:\n{denied}"
+    );
+    assert!(
+        !out_file.exists(),
+        "sandbox command must not run after revoked-handle denial"
+    );
+    let verify = ok(&h, &["journal", "verify", "--session", session]);
+    assert!(verify.contains("journal OK"), "{verify}");
 }
 
 /// Set up a session with a write grant and one admitted write action `act-ok`.
