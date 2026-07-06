@@ -245,6 +245,7 @@ fn check_hash_linkage(snapshot: &JournalSnapshot) -> CheckResult {
 /// introduced by a `SessionCreated` event earlier in the journal.
 fn check_referential_sessions(snapshot: &JournalSnapshot) -> CheckResult {
     let mut known_sessions: BTreeSet<&str> = BTreeSet::new();
+    let mut transition_ids: BTreeSet<&str> = BTreeSet::new();
     for record in &snapshot.records {
         // (referrer kind, referrer id, referenced session id) that this record
         // requires to already exist. `SessionCreated` introduces a session
@@ -253,6 +254,25 @@ fn check_referential_sessions(snapshot: &JournalSnapshot) -> CheckResult {
             JournalEvent::SessionCreated { session } => {
                 known_sessions.insert(session.session_id.as_str());
                 None
+            }
+            JournalEvent::SessionStatusChanged {
+                transition_id,
+                session_id,
+                ..
+            } => {
+                if transition_id.trim().is_empty() {
+                    return CheckResult::fail(
+                        "referential_sessions",
+                        "session transition id is empty".to_string(),
+                    );
+                }
+                if !transition_ids.insert(transition_id.as_str()) {
+                    return CheckResult::fail(
+                        "referential_sessions",
+                        format!("session transition {transition_id} appears more than once"),
+                    );
+                }
+                Some(("session transition", transition_id.as_str(), session_id.as_str()))
             }
             JournalEvent::CapabilityGranted { grant } => {
                 Some(("grant", grant.grant_id.as_str(), grant.session_id.as_str()))
@@ -280,7 +300,7 @@ fn check_referential_sessions(snapshot: &JournalSnapshot) -> CheckResult {
     }
     CheckResult::pass(
         "referential_sessions",
-        "all grants and actions reference known sessions",
+        "all lifecycle events, grants, and actions reference known sessions",
     )
 }
 

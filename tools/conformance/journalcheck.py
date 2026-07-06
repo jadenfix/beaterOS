@@ -7,8 +7,9 @@ language-neutral invariants any conformant implementation must satisfy:
 - Receipts and journal records form a hash-linked chain: seq starts at 0 and is
   contiguous, each `prev_*` equals the previous element's hash, and each hash
   recomputes over the element's canonical preimage.
-- Journal causality (`final.md` §4.5, §5.5, §26): a policy decision must bind
-  to the exact proposed manifest digest; a receipt may only appear after its
+- Journal causality (`final.md` §4.5, §5.5, §26): session lifecycle transitions
+  must follow the legal state machine; a policy decision must bind to the exact
+  proposed manifest digest; a receipt may only appear after its
   action was proposed AND that action's latest policy decision was `allowed`;
   and the receipt must be bound to the manifest's tool, input digest, target,
   and declared side-effect classes.
@@ -57,6 +58,8 @@ def verify_receipt_chain(receipts: list[dict]) -> list[str]:
 def verify_journal_chain(records: list[dict]) -> list[str]:
     errors: list[str] = []
     prev = GENESIS_HASH
+    sessions: dict[str, str] = {}
+    transition_ids: set[str] = set()
     proposed: dict[str, dict] = {}
     allowed: dict[str, str] = {}
     latest_decision: dict[str, str] = {}
@@ -73,7 +76,9 @@ def verify_journal_chain(records: list[dict]) -> list[str]:
             errors.append(f"journal[{idx}] hash {rec.get('hash')} != recomputed {expected}")
         prev = rec.get("hash", "")
 
-        errors.extend(_causality(idx, rec, proposed, allowed, latest_decision))
+        errors.extend(
+            _causality(idx, rec, sessions, transition_ids, proposed, allowed, latest_decision)
+        )
 
     return errors
 
@@ -81,6 +86,8 @@ def verify_journal_chain(records: list[dict]) -> list[str]:
 def _causality(
     idx: int,
     record: dict,
+    sessions: dict[str, str],
+    transition_ids: set[str],
     proposed: dict[str, dict],
     allowed: dict[str, str],
     latest_decision: dict[str, str],
@@ -89,7 +96,38 @@ def _causality(
     kind = event.get("kind")
     errors: list[str] = []
 
-    if kind == "action_proposed":
+    if kind == "session_created":
+        session = event["session"]
+        sid = session["session_id"]
+        if sid in sessions:
+            errors.append(f"journal[{idx}] session {sid} created more than once")
+        sessions[sid] = session["status"]
+
+    elif kind == "session_status_changed":
+        transition_id = event.get("transition_id", "")
+        sid = event["session_id"]
+        current = sessions.get(sid)
+        if not transition_id.strip():
+            errors.append(f"journal[{idx}] session transition id is empty")
+        elif transition_id in transition_ids:
+            errors.append(f"journal[{idx}] session transition {transition_id} appears more than once")
+        elif current is None:
+            errors.append(f"journal[{idx}] transition {transition_id} references unknown session {sid}")
+        elif current != event["from"]:
+            errors.append(
+                f"journal[{idx}] transition {transition_id} from {event['from']} "
+                f"does not match current status {current}"
+            )
+        elif not _valid_session_transition(event["from"], event["to"]):
+            errors.append(
+                f"journal[{idx}] illegal session transition {transition_id}: "
+                f"{event['from']} -> {event['to']}"
+            )
+        else:
+            transition_ids.add(transition_id)
+            sessions[sid] = event["to"]
+
+    elif kind == "action_proposed":
         manifest = event["manifest"]
         aid = manifest["action_id"]
         if aid in proposed:
@@ -161,3 +199,11 @@ def _causality(
             )
 
     return errors
+
+
+def _valid_session_transition(from_status: str, to_status: str) -> bool:
+    return (
+        (from_status == "running" and to_status == "paused")
+        or (from_status == "paused" and to_status == "running")
+        or (from_status in {"running", "paused"} and to_status == "canceled")
+    )
