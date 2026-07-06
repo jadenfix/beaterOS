@@ -153,5 +153,6 @@ jobs:
                 "- Real GitHub merger: `@" + merger + "`\n\n" +
                 "_This records the actual merger for the audit trail. It cannot " +
                 "distinguish agent-ids under one shared account — agent identity " +
-                "is attested, not verified (AGENTS.md §7)._"
+                "is attested, not verified (see AGENTS.md → Multi-Agent " +
+                "Contribution & Review Contract)._"
             });
