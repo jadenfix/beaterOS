@@ -14,7 +14,8 @@ The project has two explicit lanes:
 
 - Compatibility lane: a hosted Rust agent kernel and runtime that makes Linux,
   macOS, containers, browsers, tools, models, memory, and payments safe for
-  agents now.
+  agents now. Treat it as scaffolding and measurement for a native OS boundary,
+  not as a wrapper-shaped end state.
 - Metal lane: a long-horizon, first-principles OS stack that can touch scheduler,
   memory, IO, devices, isolation, authority, audit, and recovery boundaries when
   hosted traces prove those boundaries need to move closer to hardware.
@@ -82,6 +83,9 @@ boundary.
   syscalls, improve layout, then specialize. Move closer to metal only with a
   trace, benchmark, profile, or security proof that the current boundary cannot
   satisfy.
+- Every hosted service that touches authority, scheduling, memory, IO, sandboxing,
+  receipts, models, payments, or accelerators must name the native beaterOS
+  boundary it could migrate to and the evidence that would trigger that move.
 - For accelerator paths, account for host-device copies, HBM/VRAM/SRAM
   residency, pinned memory, queue delay, kernel launch overhead, model/artifact
   digests, partitioning, thermals, power, cancellation, and fallback routes.

@@ -20,8 +20,8 @@ making language or compiler claims.
 
 Rules:
 
-- Use the repo-pinned toolchain for builds unless the PR is explicitly about a
-  toolchain change.
+- Use the repo-pinned `rust-toolchain.toml` toolchain for builds unless the PR is
+  explicitly about a toolchain change.
 - If a newer compiler is claimed to be faster, safer, or required, include the
   release source, local benchmark delta, compatibility result, and rollback
   plan.

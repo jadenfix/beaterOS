@@ -263,12 +263,10 @@ fn missing_grant_denies_without_execution_authority() {
         .unwrap();
 
     assert_eq!(outcome.decision.result, DecisionResult::Denied);
-    assert!(
-        outcome
-            .decision
-            .explanation
-            .contains("required grants are missing")
-    );
+    assert!(outcome
+        .decision
+        .explanation
+        .contains("required grants are missing"));
     store
         .load_journal(session_id)
         .unwrap()
@@ -289,12 +287,10 @@ fn expired_grant_denies_without_execution_authority() {
         .unwrap();
 
     assert_eq!(outcome.decision.result, DecisionResult::Denied);
-    assert!(
-        outcome
-            .decision
-            .explanation
-            .contains("delegation ancestors is revoked, expired, or missing")
-    );
+    assert!(outcome
+        .decision
+        .explanation
+        .contains("delegation ancestors is revoked, expired, or missing"));
 }
 
 #[test]
@@ -310,12 +306,10 @@ fn revoked_grant_denies_without_execution_authority() {
         .unwrap();
 
     assert_eq!(outcome.decision.result, DecisionResult::Denied);
-    assert!(
-        outcome
-            .decision
-            .explanation
-            .contains("delegation ancestors is revoked, expired, or missing")
-    );
+    assert!(outcome
+        .decision
+        .explanation
+        .contains("delegation ancestors is revoked, expired, or missing"));
 }
 
 #[test]

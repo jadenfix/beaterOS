@@ -20,9 +20,9 @@ pub use contracts::{
     SessionStatus, SideEffectClass, SimulationEvidence, TaintLabel, ToolManifest,
 };
 pub use error::{BeaterOsError, BeaterOsResult};
-pub use hash::{HashValue, hash_json};
+pub use hash::{hash_json, HashValue};
 pub use journal::{
     InMemoryJournal, JournalEvent, JournalRecord, JournalSnapshot, JournalVerificationReport,
 };
-pub use policy::{AdmissionContext, PolicyEngine, derived_risk_floor};
+pub use policy::{derived_risk_floor, AdmissionContext, PolicyEngine};
 pub use receipt::{CapabilityReceipt, CapabilityReceiptInput, ReceiptLedger};

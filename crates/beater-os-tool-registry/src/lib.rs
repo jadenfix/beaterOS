@@ -78,6 +78,6 @@ mod registry;
 
 pub use error::{RegistryError, RegistryResult};
 pub use registry::{
-    RegisteredTool, RegistryEvent, RegistryPolicy, ResolveRequest, TestStatus, ToolPin,
-    ToolRegistry, ToolSignature, ToolTrust, content_digest,
+    content_digest, RegisteredTool, RegistryEvent, RegistryPolicy, ResolveRequest, TestStatus,
+    ToolPin, ToolRegistry, ToolSignature, ToolTrust,
 };

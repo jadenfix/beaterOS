@@ -1,18 +1,19 @@
 # beaterOS
 
-beaterOS is a long-horizon, agent-first operating-system project. The end state
-is an OS stack that can touch metal where agents need new scheduler, memory, IO,
-device, isolation, authority, audit, and recovery boundaries. The first target is
-the hosted agent kernel that proves those contracts on macOS, Linux, containers,
-browsers, and cloud VMs before the project moves low-level components into a
-kernel, hypervisor, library OS, microVM, or hardware-backed appliance.
+beaterOS is a long-horizon, agent-first operating-system project whose north
+star is a real metal-touching OS for autonomous agents. It is not a wrapper,
+desktop shell, or framework with OS branding. The hosted Rust agent kernel is
+the bootloader for that destination: it proves the scheduler, memory, IO,
+device, isolation, authority, audit, and recovery contracts before the project
+moves low-level components into a kernel, hypervisor, library OS, microVM, or
+hardware-backed appliance.
 
 The project has two explicit lanes:
 
 - **Compatibility lane:** a local-first Rust agent kernel for explicit
   authority, deterministic policy, sandboxed execution, receipts, memory
   provenance, eval gates, and auditable side effects on existing operating
-  systems.
+  systems. This is scaffolding and evidence capture, not the product ceiling.
 - **Metal lane:** a measured, multi-year path toward first-principles OS
   components for agent workloads, using the most appropriate language and
   platform boundary for each subsystem.
@@ -66,7 +67,8 @@ Important `final.md` sections:
 beaterOS starts from scarce resources and trust boundaries, not from app
 features. Every serious subsystem should state its hot path, allocation budget,
 copy budget, syscall budget, queue bounds, p95/p99 target, authority boundary,
-and regression test before it claims to be optimized.
+regression test, and native OS migration criterion before it claims to be
+optimized.
 Agents doing performance-sensitive work should use
 [docs/optimization-agent-playbook.md](docs/optimization-agent-playbook.md) for
 toolchain freshness checks, bottleneck classification, benchmark packets,
@@ -88,14 +90,16 @@ without making any one vendor SDK the operating-system boundary.
 Tempo and the rest of the ecosystem should run on beaterOS contracts: browser
 actions, sandboxed tools, model calls, memory projections, and receipts all flow
 through native policy, journal, and audit services. The UI can stay high-level;
-the OS boundary stays explicit, typed, measured, and replayable.
+the OS boundary stays explicit, typed, measured, replayable, and portable to the
+metal lane.
 
 ## Non-Goals
 
 The near-term project is not a broad hardware driver stack, a macOS replacement,
-a crypto network, a polished desktop shell, or a general chatbot UI. A
-metal-touching beaterOS is in scope only when hosted traces and benchmarks prove
-which low-level OS boundaries need to exist.
+a crypto network, a polished desktop shell, or a general chatbot UI. The
+near-term compatibility lane must still leave evidence, interfaces, and tests
+that can migrate into a native beaterOS kernel, microkernel appliance, library
+OS, hypervisor runtime, or hardware-backed agent appliance.
 
 ## Development
 

@@ -14,6 +14,10 @@ coordination artifact, not a replacement for `final.md`.
 - Architecture and implementation PRs should apply
   `docs/sota-systems-engineering.md`, including explicit hot-path budgets,
   resource bounds, language-boundary justification, and macOS impact.
+- Bare-metal, close-to-metal, performance-sensitive, compiler/runtime,
+  accelerator, or language-boundary PRs must include the optimization packet from
+  `.github/PULL_REQUEST_TEMPLATE.md`, including the native OS migration
+  criterion.
 - Local checks should include `cargo fmt --check`, `cargo test --workspace`, and
   `cargo clippy --workspace --all-targets`.
 
@@ -40,6 +44,24 @@ coordination artifact, not a replacement for `final.md`.
 | 17 | `codex/distribution-hardening` | Package local beaterOS runtime safely | installable local runtime, templates, signed release plan | 16 |
 | 18 | `codex/high-assurance-track` | Document and prototype high-assurance security path | formal invariants, crypto agility, TEE/PQC/seL4/CHERI notes | 1, 7 |
 | A1 | `claude/multi-agent-pr-review-4cfv9t` | Add beater-os-audit independent verifier and trace viewer | offline independent journal/receipt re-verification, human-legible trace render, audit metrics, redaction-safe audit bundle, `beateros-audit` CLI | 1 |
+
+## Bare-Metal Direction Slices
+
+These slices turn the metal lane from doctrine into executable work. The
+compatibility lane remains useful only when each hosted service keeps a clear
+native beaterOS migration seam.
+
+| Slice | Branch | PR Title | Scope | Depends On |
+| --- | --- | --- | --- | --- |
+| BM0 | `codex/bare-metal-readiness-gate` | Add bare-metal readiness gate | CI/check script that verifies every metal-lane PR has an optimization packet, native migration criterion, macOS fallback, and reviewer routing | 2 |
+| BM1 | `codex/native-boundary-matrix` | Map hosted services to native OS boundaries | matrix for policy, journal, sandbox, memory, browser, model, payment, scheduler, IO, and accelerator services; each row names current host substrate, native target, evidence trigger, and rollback path | BM0 |
+| BM2 | `codex/ecosystem-contract-adapters` | Prove ecosystem components use beaterOS authority | narrow adapter/conformance fixtures for Tempo browser action, beater.js agent action, beatbox sandbox action, and beater-memory projection from real journal/receipt fixtures | 10, 11, 12, BM1 |
+| BM3 | `codex/accelerator-admission-contract` | Add portable accelerator admission and receipts | schema/Rust contracts for accelerator jobs, backend identity, queue policy, memory policy, placement telemetry, fallback, and replayable receipts, plus a fake backend | 14, BM1 |
+| BM4 | `codex/scheduler-io-trace-baseline` | Capture scheduler and IO bottleneck traces | benchmark/trace harness for admission, queue wait, sandbox execute, journal append, receipt emit, model/tool call, and high-volume trace transport | 5, 8, BM1 |
+| BM5 | `codex/linux-metal-probes` | Prototype Linux add-on probes behind portable contracts | gated experiments for cgroups/seccomp/eBPF/io_uring/sched_ext where available, with macOS stubs/tests that fail closed instead of silently no-oping | BM4 |
+| BM6 | `codex/microvm-appliance-spike` | Define risky-agent microVM appliance path | Firecracker/KVM-oriented design and simulator fixture for isolated risky tool lanes, minimal device model, receipt evidence, and rollback criteria | 5, 10, BM4 |
+| BM7 | `codex/high-assurance-appliance-criteria` | Define seL4/CHERI/native target criteria | proof obligations, supported hardware assumptions, minimal TCB boundary, capability model, memory-safety story, and bring-up stop/go gates | 18, BM1 |
+| BM8 | `codex/native-beateros-roadmap-gate` | Gate wrapper-like features before merge | review tooling that flags PRs adding hosted wrappers without native boundary, measurement plan, and migration criterion | BM0, BM1 |
 
 ## Cross-Agent Coordination Log
 

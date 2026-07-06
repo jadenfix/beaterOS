@@ -25,7 +25,7 @@ Source-quality order for beaterOS design decisions:
 Command shape:
 
 ```sh
-sed -n '/^## 27\\. Source Matrix/,/^## 28\\. Final Strategic Recommendation/p' final.md |
+sed -n '/^## 27\. Source Matrix/,/^## 28\. Final Strategic Recommendation/p' final.md |
   rg -o 'https?://[^ )]+' |
   while read url; do
     curl -L --max-time 20 --connect-timeout 10 \

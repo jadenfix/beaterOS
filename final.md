@@ -8,11 +8,11 @@ Repo objective: define what must be true for beaterOS to become a successful age
 
 ## 1. Executive Thesis
 
-beaterOS is a long-horizon operating-system project for agentic computing. The end state is not just an app, a framework, or a desktop shell. The end state is an OS stack that can touch metal where that is the right engineering boundary: scheduler, memory, IO, devices, isolation, authority, audit, and recovery designed from first principles for probabilistic agents.
+beaterOS is a long-horizon operating-system project for agentic computing. The end state is not an app, a framework, a desktop shell, or a wrapper over existing tools. The end state is a metal-touching OS stack where scheduler, memory, IO, devices, isolation, authority, audit, and recovery are designed from first principles for probabilistic agents.
 
 It should not begin by trying to replace Linux or macOS wholesale.
 
-It should begin as an agent-first operating layer: a user-space control plane that sits above Linux, macOS, cloud VMs, browsers, containers, and model providers. Its job is to make agent work safe, observable, reproducible, permissioned, testable, and economically bounded. This lane is not a retreat from building a real OS. It is the bootstrapping path that lets the project validate contracts, policy, traces, and workloads before committing to hardware, kernel, and driver boundaries.
+It should begin as an agent-first operating layer: a user-space control plane that sits above Linux, macOS, cloud VMs, browsers, containers, and model providers. Its job is to make agent work safe, observable, reproducible, permissioned, testable, and economically bounded. This lane is not the product ceiling and not a wrapper-shaped compromise. It is the bootstrapping path that lets the project validate contracts, policy, traces, and workloads before committing to hardware, kernel, and driver boundaries.
 
 The first winning version is an "agent kernel" hosted by existing operating systems. The later winning version is a metal-touching OS stack whose low-level components are justified by measured agent workloads. In both cases, beaterOS owns the agent-specific primitives that conventional operating systems do not have:
 
@@ -56,10 +56,10 @@ Only after those contracts work should beaterOS become a Linux add-on, distro, d
 
 The strategic split is:
 
-- **Compatibility lane:** make Linux, macOS, containers, browsers, and cloud VMs safer for agents now.
-- **Metal lane:** build the parts of a new OS only where measurements show the host OS cannot express the right authority, latency, isolation, memory, IO, or audit contract.
+- **Compatibility lane:** make Linux, macOS, containers, browsers, and cloud VMs safer for agents now while preserving exact native beaterOS migration seams.
+- **Metal lane:** build the parts of a new OS where measurements show the host OS cannot express the right authority, latency, isolation, memory, IO, device, accelerator, or audit contract.
 
-The metal lane is a years-long research and implementation program, not a weekend kernel hobby project. It should advance through proofs, simulators, microVMs, hypervisors, narrow appliances, and hardware-backed isolation before broad device support.
+The metal lane is the north star and a years-long research and implementation program, not a weekend kernel hobby project. It should advance through proofs, simulators, microVMs, hypervisors, narrow appliances, hardware-backed isolation, and eventually selected hardware targets before broad device support.
 
 ## 3. What Must Be True For Success
 
@@ -883,25 +883,25 @@ The following choices determine whether beaterOS becomes a serious OS layer or j
 
 ### 8.1 User-Space Control Plane vs New Kernel
 
-Recommendation: start user-space.
+Recommendation: start user-space, but design every authority-bearing service as a future native beaterOS service.
 
 Reason:
 
 - The unsolved agent problems are authority, memory, observability, simulation, and policy.
 - Linux, macOS, containers, browsers, and cloud VMs already provide mature hardware support.
-- Building a bare-metal kernel first would delay the agent-specific learning loop.
+- Building a broad hardware kernel first would delay the agent-specific learning loop.
 
 Future path:
 
-- If the control plane proves valuable, create a hardened Linux distro or VM image.
-- Later, explore seL4 or CHERI-based high-assurance agent appliances for narrow workloads.
+- Use the hosted control plane to produce traces, benchmarks, proofs, and failure cases that identify which native OS boundaries must exist.
+- Convert proven boundaries into a hardened Linux add-on, microVM, library OS, hypervisor runtime, seL4/CHERI-style appliance, or selected hardware target.
 
 This is a sequencing decision, not a product ceiling. beaterOS should keep two explicit engineering lanes:
 
 1. **Linux/macOS add-on lane.** Build the agent kernel, policy engine, sandbox lane, memory provenance, scenario runner, receipts, and audit tools on existing kernels. On Linux, use cgroups, namespaces, seccomp, LSMs, eBPF, io_uring, and microVMs where they provide measurable wins. On macOS, keep a first-class local development path with portable Rust contracts and explicit platform abstraction.
 2. **Metal-touching OS lane.** Build the smallest new low-level OS pieces that agent workloads actually require: capability-secure task admission, policy-aware scheduling, bounded memory and context management, zero-copy trace and receipt paths, high-assurance sandboxing, and recoverable journals. This lane may pass through a simulator, a microkernel appliance, a library OS, a hypervisor-backed runtime, or a RISC-V/ARM research target before general hardware support.
 
-The rule is: do not move a subsystem into the metal lane until the hosted lane has produced a workload, trace, benchmark, or security proof that the host substrate cannot satisfy cleanly.
+The rule is: every hosted subsystem must name the native beaterOS boundary it is standing in for. Do not move implementation into the metal lane until the hosted lane has produced a workload, trace, benchmark, or security proof that the host substrate cannot satisfy cleanly; do not accept hosted code that hides the migration seam.
 
 ### 8.1.1 What An Operating System Built In 2026 Should Look Like
 
@@ -918,7 +918,7 @@ An OS started in 2026 should not copy the 1990s desktop/kernel split and then bo
 - **Virtualization as a primitive, not an afterthought.** MicroVMs and confidential-computing enclaves are useful isolation boundaries for risky tools and third-party workloads, but attestation and firmware trust remain attack surfaces. Use them as evidence-bearing compartments, not magic.
 - **Observable by construction.** Tracepoints, receipts, policy decisions, model routes, queue depth, spend, and filesystem/network effects are first-class records, not logs scraped after an incident.
 
-This is the deeper beaterOS direction: a compatibility-first agent OS that earns the right to become a metal-touching OS by proving which low-level boundaries must exist.
+This is the deeper beaterOS direction: a native agent OS built through compatibility scaffolding, not a compatibility wrapper that hopes to become an OS later.
 
 ### 8.1.2 Ecosystem Runtime Contract
 
@@ -939,7 +939,7 @@ The language rule for ecosystem integration is strict:
 - Assembly is allowed only at unavoidable hardware entry points.
 - WASM is allowed for portable untrusted plugins when deterministic sandboxing is more important than raw native speed.
 
-Optimization is by evidence: first remove work, then batch/cache, then reduce copies/syscalls/allocations, then specialize, then move closer to the metal. A subsystem moves from TypeScript to Rust, from Rust to C, or from user space to kernel/driver/hypervisor only when a trace, benchmark, or security review proves the current boundary is the limiting factor.
+Optimization is by evidence: first remove work, then batch/cache, then reduce copies/syscalls/allocations, then specialize, then move closer to the metal. A subsystem moves from TypeScript to Rust, from Rust to C, or from user space to kernel/driver/hypervisor only when a trace, benchmark, or security review proves the current boundary is the limiting factor. Every hosted slice must still identify its native OS migration criterion.
 
 Every serious optimization PR must carry an optimization packet: current compiler/runtime versions when relevant, the bottleneck class, the replayable workload, baseline p50/p95/p99 or throughput/memory/copy/syscall/device metrics, the target budget, the profile or trace that identifies the limiter, the authority boundary that must not change, the macOS path, and the regression gate. "Use a faster language" is not an argument until ownership, cancellation, error propagation, audit evidence, unsafe/FFI review, and rollback are explicit.
 
@@ -3407,7 +3407,7 @@ This source list should be expanded continuously. The initial weighting is prima
 
 ## 28. Final Strategic Recommendation
 
-Build beaterOS as a local-first agent operating layer with a minimal trusted agent kernel, and use that hosted kernel to earn the data needed for a future metal-touching OS.
+Build beaterOS as a local-first agent operating layer with a minimal trusted agent kernel, and treat that hosted kernel as the bootstrap path into a future metal-touching OS. The final direction is native beaterOS, not a wrapper over model SDKs, browser automation, shell tools, or existing desktop abstractions.
 
 The core invention is not a prettier chatbot, not an immediate Linux replacement, and not a crypto network. The core invention is a set of operating-system-grade contracts for agent work:
 
@@ -3435,6 +3435,6 @@ The design center should be:
 - Payment-aware.
 - Crypto-agile.
 - Human-legible.
-- Metal-ready when evidence demands it.
+- Metal-bound with evidence gates.
 
-The first version should make a narrow set of agent workflows dramatically safer and more debuggable than current agent frameworks. If it does that, the project earns the right to become a Linux add-on, a distro, a desktop environment, a cloud runtime, a microVM appliance, and eventually a high-assurance OS research platform whose low-level pieces touch metal for measured reasons.
+The first version should make a narrow set of agent workflows dramatically safer and more debuggable than current agent frameworks while producing the traces and proofs needed for native OS boundaries. If it does that, the project earns the right to become a Linux add-on, a distro, a desktop environment, a cloud runtime, a microVM appliance, and eventually a high-assurance OS whose low-level pieces touch metal for measured reasons.
