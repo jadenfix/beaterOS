@@ -16,7 +16,7 @@ use beater_os_tool_gateway::{
 use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
 };
-use beater_osd::{DAEMON_POLICY_VERSION, Store};
+use beater_osd::{DAEMON_POLICY_VERSION, Store, StoreOptions};
 use chrono::{TimeDelta, Utc};
 use uuid::Uuid;
 
@@ -132,6 +132,37 @@ fn registry(workdir: &str) -> ToolRegistry {
     registry_with_allowlist(true, workdir)
 }
 
+fn daemon_store_with_registered_shell(
+    home: &TempDir,
+    workdir: &str,
+    command: &str,
+    args: &[String],
+) -> Store {
+    let digest = local_shell_tool_digest(workdir, command, args).unwrap();
+    let tool_ref = format!("tool:shell@1.0.0#{digest}");
+    Store::open_with_options(
+        &home.path,
+        StoreOptions {
+            tool_registry: [(
+                tool_ref.clone(),
+                ToolManifest {
+                    tool_id: tool_ref,
+                    publisher: "beater.tools".to_string(),
+                    version: "1.0.0".to_string(),
+                    transport: "local_shell".to_string(),
+                    required_capabilities: Vec::new(),
+                    side_effects: BTreeSet::from([SideEffectClass::LocalWrite]),
+                    risk_class: RiskClass::Low,
+                    sandbox_required: true,
+                },
+            )]
+            .into(),
+            ..StoreOptions::default()
+        },
+    )
+    .unwrap()
+}
+
 fn registry_for_command(workdir: &str, command: &str, args: &[String]) -> ToolRegistry {
     let mut registry = ToolRegistry::new(RegistryPolicy {
         require_signature: false,
@@ -202,9 +233,10 @@ fn invocation_for_command(
 fn gateway_executes_registered_local_shell_tool_and_records_receipt() {
     let home = TempDir::new("home");
     let work = TempDir::new("work");
-    let store = Store::open(&home.path).unwrap();
     let session_id = "sess_gateway";
     let workdir = work.canonical();
+    let args = vec!["-c".to_string(), "printf gateway > out.txt".to_string()];
+    let store = daemon_store_with_registered_shell(&home, &workdir, "sh", &args);
     store.create_session(&session(&home, session_id)).unwrap();
     store
         .issue_grant(session_id, exec_grant(session_id, &workdir), Utc::now())
@@ -290,14 +322,14 @@ fn gateway_requires_tool_digest_to_match_exact_command() {
 fn gateway_receipt_records_observed_not_declared_side_effects() {
     let home = TempDir::new("home-noop");
     let work = TempDir::new("work-noop");
-    let store = Store::open(&home.path).unwrap();
     let session_id = "sess_gateway_noop";
     let workdir = work.canonical();
+    let args = vec!["-c".to_string(), "true".to_string()];
+    let store = daemon_store_with_registered_shell(&home, &workdir, "sh", &args);
     store.create_session(&session(&home, session_id)).unwrap();
     store
         .issue_grant(session_id, exec_grant(session_id, &workdir), Utc::now())
         .unwrap();
-    let args = vec!["-c".to_string(), "true".to_string()];
     let request = invocation_for_command(session_id, &workdir, "act-noop", "sh", args.clone());
 
     let outcome = execute_local_tool(

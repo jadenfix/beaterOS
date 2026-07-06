@@ -328,6 +328,55 @@ fn not_admitted_action_does_not_execute_and_leaves_no_receipt() {
     assert!(verify.contains("journal OK"), "{verify}");
 }
 
+#[test]
+fn execute_with_unregistered_tool_is_denied_before_process_spawn() {
+    let home = TempDir::new("home");
+    let work = TempDir::new("work");
+    let h = home.canonical();
+    let workdir = work.canonical();
+    let session = "sess-exec-tool-registry";
+
+    create_session(&h, session);
+    let grant_id = issue_grant(
+        &h,
+        session,
+        &["--actions", "execute", "--path-prefix", &workdir],
+    );
+
+    let out = ok(
+        &h,
+        &[
+            "action",
+            "execute",
+            "--session",
+            session,
+            "--tool",
+            "unknown-shell",
+            "--command",
+            "sh",
+            "--arg",
+            "-c",
+            "--arg",
+            "touch should_not_exist.txt",
+            "--cwd",
+            &workdir,
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-unknown-tool",
+        ],
+    );
+
+    assert!(out.contains("Denied"), "{out}");
+    assert!(out.contains("not registered"), "{out}");
+    assert!(out.contains("skipped"), "{out}");
+    assert!(
+        !PathBuf::from(&workdir)
+            .join("should_not_exist.txt")
+            .exists()
+    );
+}
+
 /// Drive an `action execute` and return the CLI output.
 fn execute_script(
     h: &str,
