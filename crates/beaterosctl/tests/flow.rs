@@ -331,6 +331,108 @@ fn unknown_session_fails_closed() {
 }
 
 #[test]
+fn session_lifecycle_gates_new_authority_and_admission() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-life";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a1",
+            "--workspace",
+            "w1",
+            "--goal",
+            "g",
+        ],
+    );
+    let paused = ok(&h, &["session", "pause", "--session", session]);
+    assert!(paused.contains("Paused"), "{paused}");
+
+    let grant_err = cli(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "*",
+            "--actions",
+            "write",
+        ],
+    )
+    .expect_err("paused session must not receive new grants");
+    assert!(
+        matches!(grant_err, CliError::Runtime(_)),
+        "unexpected grant error: {grant_err}"
+    );
+
+    let resumed = ok(&h, &["session", "resume", "--session", session]);
+    assert!(resumed.contains("Running"), "{resumed}");
+    let grant = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "*",
+            "--actions",
+            "write",
+            "--path-prefix",
+            "/repo",
+        ],
+    );
+    let grant_id = grant
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .expect("grant id");
+
+    let canceled = ok(&h, &["session", "cancel", "--session", session]);
+    assert!(canceled.contains("Canceled"), "{canceled}");
+    let admission_err = cli(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "fs.write",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/repo/x",
+            "--resolved-target",
+            "/repo/x",
+            "--grants",
+            grant_id,
+            "--action-id",
+            "act-after-cancel",
+        ],
+    )
+    .expect_err("canceled session must not admit actions");
+    assert!(
+        matches!(admission_err, CliError::Runtime(_)),
+        "unexpected admission error: {admission_err}"
+    );
+}
+
+#[test]
 fn help_is_available() {
     let home = TempHome::new();
     let out = ok(&home.as_str(), &["help"]);

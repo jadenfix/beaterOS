@@ -1,9 +1,9 @@
 # beaterosctl
 
-`beaterosctl` is the operator CLI and durable local store for the beaterOS
-agent kernel. It is the human/operator surface over `beater-os-core`: it
-persists sessions to an append-only, hash-chained journal on disk and exposes
-the kernel's deterministic policy admission as inspectable commands.
+`beaterosctl` is the operator CLI for the hosted beaterOS agent kernel. It is
+the human/operator surface over the `beater-osd` runtime store: it persists
+sessions to an append-only, hash-chained journal on disk and exposes the
+kernel's deterministic policy admission as inspectable commands.
 
 It implements these slices of `final.md`:
 
@@ -11,7 +11,9 @@ It implements these slices of `final.md`:
 - §25 What To Build First Later, items 2 (local append-only journal), 7 (CLI),
   and 9 (trace viewer).
 
-The CLI adds **no authority of its own**. Every capability check is delegated to
+The CLI adds **no authority of its own**. Capability grants, action admission,
+and receipt appends go through `beater-osd::Store`, which owns the single-writer
+runtime boundary and delegates deterministic admission to
 `beater-os-core::PolicyEngine`, outside of any model output. It cannot broaden a
 grant, and it fails closed on missing or invalid input.
 
@@ -21,20 +23,25 @@ The store root is chosen by, in order of precedence: the `--home` flag, the
 `BEATEROS_HOME` environment variable, or `./.beateros`.
 
 ```
-<home>/sessions/<session_id>/journal.jsonl    # hash-chained event journal
-<home>/sessions/<session_id>/receipts.jsonl   # hash-chained side-effect ledger
+<home>/sessions/<session_id>/journal.jsonl    # hash-chained event journal, including receipts
 ```
 
-Both files are strictly append-only. A reload reconstructs the in-memory chains
-from `beater-os-core` and re-verifies them; nothing is ever rewritten in place.
+The journal is strictly append-only. A reload reconstructs the in-memory journal
+and receipt chains from `beater-os-core` and re-verifies them; nothing is ever
+rewritten in place. Older stores may contain a `receipts.jsonl` sidecar, but the
+daemon runtime treats `ReceiptAppended` journal events as the authoritative
+receipt ledger.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `session create` | Create a goal-directed session and journal `SessionCreated`. |
+| `session create` | Create a goal-directed session and journal `SessionCreated`; by default this declares `<session>-root-grant` as the first root capability id. |
 | `session list` | List sessions in the store. |
 | `session show` | Summarize one session's grants, actions, decisions, receipts. |
+| `session pause` | Pause a running session through the daemon lifecycle state machine. |
+| `session resume` | Resume a paused session through the daemon lifecycle state machine. |
+| `session cancel` | Cancel a running or paused session through the daemon lifecycle state machine. |
 | `grant issue` | Issue a scoped `CapabilityGrant` and journal `CapabilityGranted`. |
 | `action propose` | Journal an `ActionProposed`, run policy admission, journal `PolicyDecided`. |
 | `action execute` | Run a scoped shell action through the **sandbox execution lane**: canonicalize + confine `--cwd`, admit, and (only if `Allowed`) execute confined and journal a filesystem-diff `CapabilityReceipt`. |
@@ -57,7 +64,8 @@ $ beaterosctl session create --session demo --agent coder-1 \
     --workspace repo --goal "fix the failing test"
 created session demo
 
-# Scoped file grant: any file, but only under /workspace/repo.
+# Scoped file grant: any file, but only under /workspace/repo. The first grant
+# uses the session's default root capability id unless --grant-id is supplied.
 $ beaterosctl grant issue --session demo --resource-kind file_path \
     --resource-id '*' --actions read,write --path-prefix /workspace/repo
 issued grant <grant-id>
@@ -65,13 +73,15 @@ issued grant <grant-id>
 # An in-scope write is admitted by an explicit, active capability grant.
 $ beaterosctl action propose --session demo --tool fs.write --kind write \
     --target-kind file_path --target /workspace/repo/src/lib.rs \
+    --resolved-target /workspace/repo/src/lib.rs \
     --grants <grant-id> --action-id a1
 action a1
   decision:    Allowed
 
 # An out-of-scope write is refused by policy — not by the model.
 $ beaterosctl action propose --session demo --tool fs.write --kind write \
-    --target-kind file_path --target /etc/hosts --grants <grant-id> --action-id a2
+    --target-kind file_path --target /etc/hosts --resolved-target /etc/hosts \
+    --grants <grant-id> --action-id a2
 action a2
   decision:    NeedsNarrowedGrant
 
@@ -141,22 +151,25 @@ assumed here.
 ## Invariants preserved
 
 - **No ambient authority.** An action with no matching grant is never admitted.
+- **Session lifecycle gates authority.** New grants, payment mandates, and
+  action admissions are refused unless the daemon-projected session status is
+  `Running`.
 - **Policy outside the model.** Admission is computed by `PolicyEngine`, which
   has no model dependency.
 - **Journal before side effects.** `ActionProposed` and `PolicyDecided` are
-  written before any receipt can exist.
+  written by `beater-osd::Store::admit_action` before any receipt can exist.
 - **Receipts after side effects.** A receipt can only be recorded for an action
-  with a prior `Allowed` decision; the store refuses otherwise, mirroring the
-  core journal causality verifier.
+  with a prior `Allowed` decision; `beater-osd::Store::append_receipt` refuses
+  otherwise through the core journal causality verifier.
 - **Tamper-evident.** `journal verify` recomputes every hash and rejects any
   reordered or edited record.
 
 ## Scope boundary
 
-This crate deliberately does **not** implement session lifecycle transitions
-(pause/resume/cancel) or tool registration. Those are separate backlog slices
-(`session-runtime`, `tool-registry`). The scoped shell **sandbox lane** is now
-implemented (`action execute`, via `beater-os-sandbox`); richer lanes (network,
-container/VM, browser) remain future targets. When the `beater-osd` runtime
-lands, `beaterosctl` should delegate session mutation to it rather than
-journaling transitions directly.
+This crate deliberately does **not** implement tool registration. That is a
+separate backlog slice (`tool-registry`). The scoped shell **sandbox lane** is
+now implemented (`action execute`, via `beater-os-sandbox`); richer lanes
+(network, container/VM, browser) remain future targets. The current CLI opens
+the `beater-osd` store in-process; the next runtime step is exposing the same
+store through a long-running local daemon API without changing the authority
+contract.
