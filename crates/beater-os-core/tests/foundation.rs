@@ -486,11 +486,11 @@ fn policy_enforces_path_prefix_constraints_even_with_wildcard_resource() {
 }
 
 #[test]
-fn policy_uses_resolved_file_target_for_canonical_path_prefix_authority() {
+fn policy_admits_canonical_mediated_file_target_for_path_prefix_authority() {
     let now = fixed_time();
     let mut manifest = read_manifest();
     manifest.action_kind = ActionKind::Execute;
-    manifest.target.resource_id = "/alias/repo/file.txt".to_string();
+    manifest.target.resource_id = "/workspace/repo/file.txt".to_string();
     manifest.resolved_target = Some(CapabilitySelector {
         resource_kind: ResourceKind::FilePath,
         resource_id: "/workspace/repo/file.txt".to_string(),
@@ -503,11 +503,11 @@ fn policy_uses_resolved_file_target_for_canonical_path_prefix_authority() {
 }
 
 #[test]
-fn policy_uses_resolved_file_target_for_concrete_file_grant_authority() {
+fn policy_admits_canonical_mediated_file_target_for_concrete_file_grant_authority() {
     let now = fixed_time();
     let mut manifest = read_manifest();
     manifest.action_kind = ActionKind::Execute;
-    manifest.target.resource_id = "/alias/repo".to_string();
+    manifest.target.resource_id = "/workspace/repo".to_string();
     manifest.resolved_target = Some(CapabilitySelector {
         resource_kind: ResourceKind::FilePath,
         resource_id: "/workspace/repo".to_string(),
@@ -522,6 +522,7 @@ fn policy_uses_resolved_file_target_for_concrete_file_grant_authority() {
 fn raw_file_proposal_cannot_launder_requested_path_through_resolved_target() {
     let now = fixed_time();
     let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Execute;
     manifest.target.resource_id = "/etc/hosts".to_string();
     manifest.resolved_target = Some(CapabilitySelector {
         resource_kind: ResourceKind::FilePath,
@@ -529,6 +530,7 @@ fn raw_file_proposal_cannot_launder_requested_path_through_resolved_target() {
     });
     let mut grant = grant_for_file(now);
     grant.scope.selector.resource_id = "*".to_string();
+    grant.scope.actions = set([ActionKind::Execute]);
     let decision = admit(&manifest, &admission_context(now, vec![grant]));
     assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
 }

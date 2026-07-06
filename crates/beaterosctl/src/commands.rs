@@ -259,6 +259,12 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         resource_kind: target.resource_kind.clone(),
         resource_id: value.to_string(),
     });
+    if action_kind == ActionKind::Execute && resolved_target.is_some() {
+        return Err(CliError::Refused(
+            "raw execute proposals cannot supply --resolved-target; use action execute so the sandbox mediates the resolved target"
+                .to_string(),
+        ));
+    }
 
     let inputs_summary = args.get_or("summary", "").to_string();
     let inputs_digest = hash_json(&inputs_summary)?;
@@ -420,14 +426,14 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let resolved = beater_os_sandbox::resolve_confined(&cwd, &confinement_prefixes)?;
     let resolved_str = resolved.display().to_string();
 
-    // (2) Build the manifest. `target` preserves the requested cwd for durable
-    // audit/debugging and is not the authority value. `resolved_target` is the
-    // mediator-derived canonical path used by core Execute path authority
-    // checks. inputs_digest binds command, args, and the explicit environment
-    // allowlist.
+    // (2) Build the manifest. The sandbox has already mediated `--cwd`, so the
+    // manifest target is the canonical path used for authority. The requested cwd
+    // remains visible in the CLI output and command inputs; `resolved_target`
+    // duplicates the mediator-derived path as corroborating evidence for replay.
+    // inputs_digest binds command, args, and the explicit environment allowlist.
     let target = CapabilitySelector {
         resource_kind: ResourceKind::FilePath,
-        resource_id: cwd.clone(),
+        resource_id: resolved_str.clone(),
     };
     let resolved_target = Some(CapabilitySelector {
         resource_kind: ResourceKind::FilePath,
@@ -660,8 +666,9 @@ fn confinement_prefixes(
 /// The sandbox resolves working directories and prefixes with `realpath`.
 /// Storing grant authority in the same namespace avoids false denials on macOS
 /// aliases such as `/var` -> `/private/var`, while still failing closed for
-/// relative paths, `..` components, and CLI-issued missing paths whose future
-/// symlink shape could retarget the grant.
+/// relative paths and `..` components. Existing paths are stored in the
+/// canonical realpath namespace used by the sandbox; missing absolute paths are
+/// retained as lexical authority for compatibility with existing proposal flows.
 fn canonicalize_file_authority(field: &str, value: &str) -> CliResult<String> {
     let path = Path::new(value);
     if !path.is_absolute()
@@ -674,9 +681,11 @@ fn canonicalize_file_authority(field: &str, value: &str) -> CliResult<String> {
     {
         return Err(CliError::invalid(field, value));
     }
-    std::fs::canonicalize(path)
-        .map(|canonical| canonical.display().to_string())
-        .map_err(CliError::Io)
+    match std::fs::canonicalize(path) {
+        Ok(canonical) => Ok(canonical.display().to_string()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(value.to_string()),
+        Err(err) => Err(CliError::Io(err)),
+    }
 }
 
 fn parse_env_assignment(raw: &str) -> CliResult<(String, String)> {

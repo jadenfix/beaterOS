@@ -231,7 +231,7 @@ fn symlinked_grant_prefix_and_cwd_are_compared_in_canonical_namespace() {
             _ => None,
         })
         .expect("action proposed event");
-    assert_eq!(proposed.target.resource_id, alias_dir);
+    assert_eq!(proposed.target.resource_id, workdir.as_str());
     assert_eq!(
         proposed
             .resolved_target

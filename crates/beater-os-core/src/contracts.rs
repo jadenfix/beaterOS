@@ -445,9 +445,8 @@ impl CapabilityGrant {
         self.constraints.path_prefixes.iter().any(|prefix| {
             normalized_absolute_path(prefix)
                 .map(|normalized_prefix| {
-                    path_is_inside_prefix(&resolved_path, &normalized_prefix)
-                        && (uses_resolved_file_authority(manifest)
-                            || path_is_inside_prefix(&requested_path, &normalized_prefix))
+                    path_is_inside_prefix(&requested_path, &normalized_prefix)
+                        && path_is_inside_prefix(&resolved_path, &normalized_prefix)
                 })
                 .unwrap_or(false)
         })
@@ -468,24 +467,7 @@ impl CapabilityGrant {
 }
 
 fn scope_selector(manifest: &ActionManifest) -> &CapabilitySelector {
-    if uses_resolved_file_authority(manifest) {
-        return manifest
-            .resolved_target
-            .as_ref()
-            .expect("uses_resolved_file_authority requires a resolved target");
-    }
     &manifest.target
-}
-
-fn uses_resolved_file_authority(manifest: &ActionManifest) -> bool {
-    if manifest.target.resource_kind == ResourceKind::FilePath
-        && manifest.action_kind == ActionKind::Execute
-        && let Some(resolved_target) = &manifest.resolved_target
-        && resolved_target.resource_kind == ResourceKind::FilePath
-    {
-        return true;
-    }
-    false
 }
 
 fn path_is_inside_prefix(path: &str, prefix: &str) -> bool {
