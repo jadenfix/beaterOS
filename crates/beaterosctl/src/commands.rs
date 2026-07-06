@@ -116,7 +116,6 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let projection = store.project(&session_id)?;
 
     let resource_kind: ResourceKind = args::require_enum(args, "resource-kind")?;
-    let resource_id = args.require("resource-id")?.to_string();
 
     let mut actions = BTreeSet::new();
     for token in args.csv("actions") {
@@ -142,6 +141,16 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     for host in args.csv("network-allow") {
         constraints.network_allowlist.insert(host);
     }
+
+    let resource_id = match args.get("resource-id") {
+        Some(resource_id) => resource_id.to_string(),
+        None if resource_kind == ResourceKind::FilePath
+            && !constraints.path_prefixes.is_empty() =>
+        {
+            "*".to_string()
+        }
+        None => return Err(CliError::MissingFlag("resource-id".to_string())),
+    };
 
     let ttl = args::get_u64_or(args, "expires-in-secs", DEFAULT_GRANT_TTL_SECS)?;
     let expires_at = now

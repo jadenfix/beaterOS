@@ -72,9 +72,10 @@ pub fn help_text() -> String {
          \x20                [--session <id>] [--created-by <id>] [--policy-profile <p>]\n\
          \x20 session list\n\
          \x20 session show    --session <id>\n\
-         \x20 grant issue     --session <id> --resource-kind <kind> --resource-id <id>\n\
+         \x20 grant issue     --session <id> --resource-kind <kind> [--resource-id <id>]\n\
          \x20                 --actions <a,b> [--path-prefix <p>]... [--network-allow <h>]...\n\
          \x20                 [--max-risk <r>] [--expires-in-secs <n>] [--reason <text>]\n\
+         \x20                 file_path grants with --path-prefix use '*' when --resource-id is omitted\n\
          \x20 action propose  --session <id> --tool <id> --kind <action>\n\
          \x20                 --target-kind <kind> --target <id> --grants <g1,g2>\n\
          \x20                 [--risk <r>] [--side-effects <s,..>] [--data-classes <d,..>]\n\

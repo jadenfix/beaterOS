@@ -47,6 +47,11 @@ Enum-valued flags use the snake_case names from `beater-os-core`
 `critical`, `local_write`, `code`). Run `beaterosctl help` for the full flag
 list.
 
+For `file_path` grants, `--resource-id` is optional when at least one
+`--path-prefix` is present. In that scoped form, the CLI records the exact
+selector as `*` and lets the path-prefix constraint do the narrowing. Unscoped
+grants and non-file resources still require an explicit `--resource-id`.
+
 ## Worked MVP flow
 
 This is the `final.md` §24 MVP proof: a repo task where the agent can read and
@@ -59,7 +64,7 @@ created session demo
 
 # Scoped file grant: any file, but only under /workspace/repo.
 $ beaterosctl grant issue --session demo --resource-kind file_path \
-    --resource-id '*' --actions read,write --path-prefix /workspace/repo
+    --actions read,write --path-prefix /workspace/repo
 issued grant <grant-id>
 
 # An in-scope write is admitted by an explicit, active capability grant.

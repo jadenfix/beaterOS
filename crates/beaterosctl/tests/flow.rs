@@ -336,6 +336,154 @@ fn help_is_available() {
     let out = ok(&home.as_str(), &["help"]);
     assert!(out.contains("beaterosctl"));
     assert!(out.contains("session create"));
+    assert!(out.contains("file_path grants with --path-prefix"));
+}
+
+#[test]
+fn file_path_prefix_grant_defaults_to_wildcard_selector() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-prefix-default";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a",
+            "--workspace",
+            "w",
+            "--goal",
+            "g",
+        ],
+    );
+
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--actions",
+            "read,write",
+            "--path-prefix",
+            "/workspace/repo",
+        ],
+    );
+    assert!(
+        grant_out.contains("scope:   FilePath *"),
+        "path-prefix file grants should default the exact selector to '*':\n{grant_out}"
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id");
+
+    let allow = ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "fs.write",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/workspace/repo/src/main.rs",
+            "--resolved-target",
+            "/workspace/repo/src/main.rs",
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-in-prefix",
+        ],
+    );
+    assert!(
+        allow.contains("Allowed"),
+        "wildcard selector plus path prefix should admit in-scope path:\n{allow}"
+    );
+
+    let denied = ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "fs.write",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/etc/passwd",
+            "--resolved-target",
+            "/etc/passwd",
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-outside-prefix",
+        ],
+    );
+    assert!(
+        denied.contains("NeedsNarrowedGrant"),
+        "path prefix remains the narrowing authority:\n{denied}"
+    );
+}
+
+#[test]
+fn file_path_grant_without_resource_or_prefix_fails_closed() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-missing-resource";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a",
+            "--workspace",
+            "w",
+            "--goal",
+            "g",
+        ],
+    );
+
+    let err = cli(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--actions",
+            "read",
+        ],
+    )
+    .expect_err("unscoped file grant without --resource-id must fail closed");
+    assert!(
+        matches!(err, CliError::MissingFlag(ref flag) if flag == "resource-id"),
+        "unexpected error: {err}"
+    );
 }
 
 /// Set up a session with a write grant and one admitted write action `act-ok`.
