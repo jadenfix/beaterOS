@@ -100,6 +100,8 @@ pub struct ProbeContext {
     #[serde(default)]
     pub mandates: Vec<PaymentMandate>,
     #[serde(default)]
+    pub payment_reserved_by_mandate: BTreeMap<String, u64>,
+    #[serde(default)]
     pub revoked_handles: BTreeSet<String>,
 }
 
@@ -114,7 +116,7 @@ impl ProbeContext {
             approvals: self.approvals,
             simulations: self.simulations,
             mandates: self.mandates,
-            payment_reserved_by_mandate: BTreeMap::new(),
+            payment_reserved_by_mandate: self.payment_reserved_by_mandate,
             revoked_handles: self.revoked_handles,
             tool_registry,
             require_registered_tools: true,
