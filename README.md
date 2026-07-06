@@ -7,15 +7,13 @@ the hosted agent kernel that proves those contracts on macOS, Linux, containers,
 browsers, and cloud VMs before the project moves low-level components into a
 kernel, hypervisor, library OS, microVM, or hardware-backed appliance.
 
-The project has two explicit lanes:
+The project has two explicit lanes that share contracts but have different
+delivery promises:
 
-- **Compatibility lane:** a local-first Rust agent kernel for explicit
-  authority, deterministic policy, sandboxed execution, receipts, memory
-  provenance, eval gates, and auditable side effects on existing operating
-  systems.
-- **Metal lane:** a measured, multi-year path toward first-principles OS
-  components for agent workloads, using the most appropriate language and
-  platform boundary for each subsystem.
+| Lane | Near-term shape | Rule |
+| --- | --- | --- |
+| **Compatibility / Linux add-on lane** | A local-first Rust agent kernel and runtime for explicit authority, deterministic policy, sandboxed execution, receipts, memory provenance, eval gates, and auditable side effects on Linux, macOS, containers, browsers, and cloud VMs. | Ship hosted slices first, keep macOS working, and use Linux-specific primitives only behind abstractions. |
+| **Metal OS lane** | A measured, multi-year path toward first-principles scheduler, memory, IO, device, accelerator, isolation, authority, audit, and recovery components for agent workloads. | Move closer to kernel, hypervisor, firmware, or bare metal only when traces, benchmarks, or security proofs show the hosted boundary is insufficient. |
 
 Start with [AGENTS.md](AGENTS.md) for agent-facing repo context. The
 close-to-the-metal systems engineering rules are in
@@ -38,6 +36,9 @@ that a real metal-touching agent OS would need.
 | Agent startup context | [AGENTS.md](AGENTS.md) | Repo map, non-negotiables, and common commands |
 | Implementation sequence | [docs/implementation-backlog.md](docs/implementation-backlog.md) | PR-sized slices and no-self-merge review rules |
 | Systems engineering | [docs/sota-systems-engineering.md](docs/sota-systems-engineering.md) | Hot-path, Rust/C/assembly, security, and macOS doctrine |
+| Metal OS architecture | [docs/design/metal-os-architecture.md](docs/design/metal-os-architecture.md) | Lane model and first-principles path toward a metal-touching OS |
+| Accelerator fabric | [docs/design/accelerator-runtime-contract.md](docs/design/accelerator-runtime-contract.md) | GPU, TPU, LPU, NPU, Apple Silicon, and future ASIC review contract |
+| Language/toolchain matrix | [docs/design/language-toolchain-matrix.md](docs/design/language-toolchain-matrix.md) | Rust MSRV, C/C++/assembly, Python, Zig, Swift, Go, and accelerator language boundaries |
 | Threat model | [docs/threat-model.md](docs/threat-model.md) | Assets, trust boundaries, attacks, mitigations, residual risk |
 | Wire contracts | [spec/README.md](spec/README.md) | Language-neutral JSON Schema and conformance suite |
 | Rust core | [crates/beater-os-core](crates/beater-os-core) | Agent sessions, grants, manifests, decisions, receipts, journals |
@@ -64,19 +65,21 @@ Important `final.md` sections:
 ## First-Principles Direction
 
 beaterOS starts from scarce resources and trust boundaries, not from app
-features. Every serious subsystem should state its hot path, allocation budget,
-copy budget, syscall budget, queue bounds, p95/p99 target, authority boundary,
-and regression test before it claims to be optimized.
+features. Every serious subsystem should state its lane, hot path, allocation
+budget, copy budget, syscall budget, queue bounds, p95/p99 target, authority
+boundary, and regression test before it claims to be optimized.
 Agents doing performance-sensitive work should use
 [docs/optimization-agent-playbook.md](docs/optimization-agent-playbook.md) for
 toolchain freshness checks, bottleneck classification, benchmark packets,
 language-boundary review, and accelerator evidence.
 
-The default implementation language is Rust. C is for stable ABI, driver,
-hypervisor, browser/embedder interop, existing high-quality C libraries, or a
-measured hot path where safe Rust cannot meet the requirement. Assembly is for
-unavoidable hardware entry points. TypeScript is acceptable for UI and agent
-ergonomics, but not as the authority boundary.
+The default implementation language is Rust, with the repo MSRV and language
+boundary rules tracked in
+[docs/design/language-toolchain-matrix.md](docs/design/language-toolchain-matrix.md).
+C is for stable ABI, driver, hypervisor, browser/embedder interop, existing
+high-quality C libraries, or a measured hot path where safe Rust cannot meet the
+requirement. Assembly is for unavoidable hardware entry points. TypeScript is
+acceptable for UI and agent ergonomics, but not as the authority boundary.
 
 Accelerators are first-class OS resources. GPU, TPU, LPU, NPU, Apple
 Silicon-style local accelerators, media engines, enclaves, and future agent ASICs
@@ -92,10 +95,10 @@ the OS boundary stays explicit, typed, measured, and replayable.
 
 ## Non-Goals
 
-The near-term project is not a broad hardware driver stack, a macOS replacement,
-a crypto network, a polished desktop shell, or a general chatbot UI. A
-metal-touching beaterOS is in scope only when hosted traces and benchmarks prove
-which low-level OS boundaries need to exist.
+The near-term project is not yet a Linux add-on package, a bootable OS, a broad
+hardware driver stack, a macOS replacement, a crypto network, a polished desktop
+shell, or a general chatbot UI. A metal-touching beaterOS is in scope only when
+hosted traces and benchmarks prove which low-level OS boundaries need to exist.
 
 ## Development
 

@@ -15,6 +15,11 @@ it, then keep changes PR-scoped and reviewed by a non-author.
 beaterOS should be designed like close-to-metal systems software:
 
 - Start from invariants, budgets, and bottlenecks, not framework preference.
+- Keep the hosted Linux/macOS runtime lane separate from the metal OS lane.
+  Default implementation work is hosted/runtime unless the PR explicitly names a
+  metal research target.
+- Do not present early runtime slices as a bootable OS, Linux distribution, or
+  hardware port.
 - Prefer simple data layouts, bounded queues, explicit ownership, and measurable
   hot paths.
 - Keep the policy/audit path deterministic and replayable.

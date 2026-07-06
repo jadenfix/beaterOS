@@ -4,6 +4,7 @@ Use this checklist for design reviews, code reviews, and architecture changes.
 
 ## Critical Path
 
+- Name the lane: compatibility/runtime, Linux add-on, or metal research.
 - Name the hot path and cold path.
 - State p95/p99 or throughput expectations when relevant.
 - Count likely allocations, copies, serializations, syscalls, locks, and network
@@ -31,6 +32,8 @@ Use this checklist for design reviews, code reviews, and architecture changes.
 ## Language Boundary
 
 - The selected language is the best fit for the subsystem and boundary.
+- Current compiler/runtime/backend facts were verified from primary sources when
+  they are part of the claim.
 - Rust is preferred when the tradeoff is close.
 - C usage is justified by ABI, platform, driver, hypervisor, sandbox, or measured
   hot-path constraints.
@@ -38,6 +41,23 @@ Use this checklist for design reviews, code reviews, and architecture changes.
 - Unsafe/C/assembly boundaries are small, documented, and wrapped in safe Rust.
 - Fuzz, property, or boundary tests cover malformed inputs and failure paths when
   practical.
+
+## Accelerator Boundary
+
+- Accelerator work declares device class, backend, runtime/compiler version,
+  model/artifact digest, precision/quantization, batch/streaming mode, timeout,
+  cancellation, and fallback.
+- Host-device copy bytes, pinned memory, DMA/IOMMU or page migration, launch
+  count, queue delay, residency misses, synchronization fences, and throttling
+  are measured or explicitly out of scope.
+- Isolation is enforced by device ACLs, containers, VMs, IOMMU/VFIO-style
+  boundaries, hardware partitioning such as MIG, or conservative single-tenant
+  scheduling; environment-variable device hiding is not sufficient.
+- Determinism notes cover hardware/runtime version, precision, atomics or
+  reductions, seed where meaningful, tolerated drift, and cross-device limits.
+- Telemetry records enqueue/dequeue/start/finish, queue depth, device
+  utilization where available, memory residency, error/fallback reason, and
+  receipt digest.
 
 ## macOS
 

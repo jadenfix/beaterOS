@@ -51,6 +51,12 @@ boundary.
   performance-sensitive implementation, language-boundary decisions, compiler
   freshness checks, bottleneck analysis, accelerator review packets, and
   benchmark/trace evidence.
+- `docs/design/metal-os-architecture.md` defines the hosted runtime, Linux
+  add-on, and metal research lanes.
+- `docs/design/accelerator-runtime-contract.md` defines the portable
+  accelerator job, queue, memory, telemetry, receipt, and fallback contract.
+- `docs/design/language-toolchain-matrix.md` defines the repo MSRV posture and
+  language/toolchain boundary rules.
 - `.codex/skills/beateros-systems-engineering/SKILL.md` packages that doctrine
   as a reusable Codex skill.
 - `CLAUDE.md` and `.cursor/rules/beateros.mdc` keep equivalent guidance close to
@@ -62,6 +68,9 @@ boundary.
   merges their own PR.
 - Do not weaken `final.md`. Add clarifying docs or implementation artifacts
   around it unless the user explicitly asks to edit it.
+- Do not collapse the compatibility lane into the metal lane. Linux/macOS
+  runtime work preserves hosted contracts; metal work requires evidence that the
+  hosted boundary is insufficient.
 - Treat performance as an architectural property. Identify the hot path, syscall
   budget, allocation budget, copy budget, queue bounds, and p95/p99 target before
   optimizing syntax.

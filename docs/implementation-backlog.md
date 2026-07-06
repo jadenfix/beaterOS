@@ -10,6 +10,10 @@ coordination artifact, not a replacement for `final.md`.
 - No PR is merged by the agent or person who authored it.
 - PRs should stay contract-focused and map to named sections of `final.md`.
 - `final.md` must not be shortened or weakened as part of implementation.
+- Any PR that claims runtime, Linux add-on, kernel-adjacent, accelerator, or
+  metal work must name its lane: compatibility/runtime, Linux add-on, or metal
+  research. Hosted runtime slices must not be presented as a bootable OS, and
+  metal slices require evidence that the hosted boundary is insufficient.
 - Branches and worktrees should be cleaned up after merge.
 - Architecture and implementation PRs should apply
   `docs/sota-systems-engineering.md`, including explicit hot-path budgets,
@@ -76,6 +80,16 @@ parallel. Append here; do not rewrite others' entries.
 After slice 2, slices 3 and 4 can proceed in parallel if their APIs remain
 compatible. After the MVP workflow, observability, memory, browser, model, and
 human-review work can split across separate branches with disjoint write scopes.
+
+## Lane Gates
+
+Use these gates before opening a slice or accepting a PR:
+
+| Lane | Allowed work | Required proof | Not allowed |
+| --- | --- | --- | --- |
+| Compatibility/runtime | Rust contracts, local daemon/CLI, macOS/Linux adapters, sandbox lanes, model/tool/payment/memory/browser control planes, conformance tests | Contract tests, scenario tests, local e2e, explicit authority and receipt evidence | Calling it a bootable OS or silently depending on Linux-only APIs |
+| Linux add-on | cgroups, namespaces, seccomp, LSM/eBPF hooks, `io_uring`, XDP, KVM/microVMs, package/runtime integration | Measured Linux benefit, platform abstraction, macOS fallback or future-target label, security review | Treating Linux kernel behavior as portable policy truth |
+| Metal research | scheduler, memory, IO, accelerator, driver, hypervisor, firmware, microkernel, unikernel, simulator, or appliance prototypes | Hosted trace/benchmark/security proof, hardware/simulator target, rollback/fallback, unsafe/FFI review, regression gate | Broad driver-stack work before agent-specific contracts prove the need |
 
 ## Multi-Agent Coordination Log
 

@@ -12,6 +12,11 @@ Key rules:
 
 - `final.md` is the source-of-truth plan. Do not shorten or weaken it.
 - Every feature should land through a scoped PR with non-author review and merge.
+- beaterOS has a hosted Linux/macOS runtime lane and a separate metal OS lane.
+  Default implementation work is hosted/runtime unless a PR explicitly scopes a
+  metal research target.
+- Do not present early runtime slices as a bootable OS, Linux distribution, or
+  hardware port.
 - Design from first principles: critical path, authority boundary, state model,
   resource bounds, failure mode, and evidence trail.
 - Optimize architecture before micro-optimizing code: fewer copies, fewer

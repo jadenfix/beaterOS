@@ -6,6 +6,32 @@ sandboxing, model routing, payment rails, journals, memory, and release gates.
 For detailed optimization-agent workflow, bottleneck taxonomy, toolchain
 freshness rules, and accelerator review packets, also use
 `docs/optimization-agent-playbook.md`.
+For lane, accelerator, and language/toolchain boundaries, use
+`docs/design/metal-os-architecture.md`,
+`docs/design/accelerator-runtime-contract.md`, and
+`docs/design/language-toolchain-matrix.md`.
+
+## Lane Model
+
+beaterOS has two engineering lanes:
+
+- **Compatibility / Linux add-on lane:** hosted Rust services and platform
+  adapters that make existing Linux, macOS, container, browser, VM, model, tool,
+  memory, and payment substrates safer for agents. This lane can use Linux
+  primitives such as cgroups, namespaces, seccomp, eBPF, `io_uring`, XDP, KVM,
+  and microVMs when they produce measured wins, but macOS remains a first-class
+  development and runtime path through abstractions, tests, or explicit future
+  labels.
+- **Metal OS lane:** kernel, hypervisor, driver, firmware, library-OS,
+  microkernel, unikernel, simulator, appliance, or hardware-backed components
+  designed from first principles for agent workloads. This lane starts only when
+  the hosted lane has produced traces, benchmarks, or security evidence showing
+  that the current OS boundary cannot satisfy the requirement.
+
+Do not blur the lanes. A hosted runtime improvement is valuable without claiming
+to be a bootable OS. A metal proposal is not an optimization unless it names the
+hosted limitation, the authority boundary, the platform target, the fallback,
+and the regression gate.
 
 ## First Principles
 
@@ -312,6 +338,9 @@ Important constraints:
 
 Use this checklist on architecture and implementation PRs:
 
+- The PR names its lane: compatibility runtime, Linux add-on, or metal research.
+- Any move toward kernel, hypervisor, driver, firmware, or bare metal is backed
+  by a hosted-lane trace, benchmark, or security proof.
 - The critical path and resource budgets are stated.
 - The bottleneck class, baseline, target, and replay command are stated.
 - Compiler/runtime versions are recorded when they are part of the claim.

@@ -115,6 +115,7 @@ Evidence map:
 
 A performance PR needs the smallest packet that proves the claim:
 
+- lane: compatibility runtime, Linux add-on, or metal research
 - workload: command, scenario, trace, fixture, or benchmark input
 - baseline: current p50/p95/p99, throughput, memory, syscalls, copies, queue
   depth, model/tool calls, device occupancy, or other relevant metric
@@ -156,6 +157,10 @@ Stop conditions:
   complexity, operational state, or platform-specific behavior
 - stop when the measured bottleneck moves outside the changed subsystem and open
   a follow-up instead of widening the PR
+- moving from hosted runtime to Linux-only API, kernel extension, hypervisor,
+  driver, firmware, or bare metal is not a performance optimization by itself.
+  The packet must prove the hosted boundary is the bottleneck and document the
+  macOS path, fallback, review owner, and rollback plan.
 
 ## Optimization Review Infrastructure
 
@@ -166,6 +171,8 @@ Required infrastructure for serious performance work:
 
 - benchmark manifest: workload name, input fixture, command, warmup, sample
   count, timeout, target machine class, and expected metric
+- lane manifest: compatibility runtime, Linux add-on, or metal research, plus
+  the platform primitives used and the fallback for unsupported hosts
 - trace schema: spans for admission, queue wait, execution, journal append,
   receipt emission, model/tool/provider call, and accelerator enqueue/start/end
 - profile artifact: Instruments, `sample`, Rust benchmark output, allocation

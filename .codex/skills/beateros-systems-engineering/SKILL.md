@@ -16,6 +16,10 @@ For the full doctrine, read
 repo map and `final.md` when product intent or OS-level direction is unclear.
 For performance-sensitive work, language-boundary changes, accelerator paths, or
 optimization claims, also read `docs/optimization-agent-playbook.md`.
+For lane choices, metal-touching architecture, and accelerator fabric work, read
+`docs/design/metal-os-architecture.md` and
+`docs/design/accelerator-runtime-contract.md`. For compiler/runtime and
+language selection claims, read `docs/design/language-toolchain-matrix.md`.
 
 ## Workflow
 
@@ -26,6 +30,8 @@ optimization claims, also read `docs/optimization-agent-playbook.md`.
      boundary is involved?
 
 2. Separate hot path from cold path.
+   - Name the lane first: compatibility/runtime, Linux add-on, or metal
+     research.
    - Name latency, allocation, copy, syscall, queue, and retry expectations.
    - Move audit explanation, diagnostics, summarization, and expensive
      formatting off the critical path unless they are required for safety.
@@ -56,9 +62,10 @@ optimization claims, also read `docs/optimization-agent-playbook.md`.
    - Do not treat model memory as privileged truth without provenance.
 
 6. Require the optimization packet for performance claims.
-   - Record workload, replay command, bottleneck class, baseline, target budget,
-     profile/trace artifact, compiler/runtime/backend versions, authority
-     boundary, macOS path, fallback, regression gate, and independent reviewer.
+   - Record lane, workload, replay command, bottleneck class, baseline, target
+     budget, profile/trace artifact, compiler/runtime/backend versions,
+     authority boundary, macOS path, fallback, regression gate, and independent
+     reviewer.
    - Reject noisy benchmark claims, cold-path tuning, and complexity-raising
      FFI/unsafe/accelerator paths unless the measured bottleneck justifies them.
 
@@ -103,3 +110,9 @@ optimization claims, also read `docs/optimization-agent-playbook.md`.
 - Repository `docs/optimization-agent-playbook.md`: optimization workflow,
   bottleneck taxonomy, language/toolchain discipline, and accelerator review
   packet.
+- Repository `docs/design/metal-os-architecture.md`: first-principles lane
+  model for the hosted runtime, Linux add-on path, and metal OS path.
+- Repository `docs/design/accelerator-runtime-contract.md`: vendor-neutral
+  GPU/TPU/LPU/NPU/Apple Silicon/custom-silicon contract and review checklist.
+- Repository `docs/design/language-toolchain-matrix.md`: repo MSRV posture,
+  language/toolchain boundaries, and current-version verification discipline.

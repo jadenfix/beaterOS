@@ -81,6 +81,35 @@ item (e.g. a docs-only PR), mark it `n/a` and say why.
       PR pass. (governance rule, from `docs/implementation-backlog.md` "Review
       And Merge Rules"; not a `final.md` section)
 
+## D. SOTA systems and optimization gate (blocking for performance or metal claims)
+
+Use this section for any PR that claims a performance improvement, changes a
+language boundary, adds unsafe/FFI/assembly, touches accelerator paths, uses
+Linux-specific primitives, or moves closer to kernel, hypervisor, driver,
+firmware, or bare metal.
+
+- [ ] **Lane is named.** The PR identifies compatibility/runtime, Linux add-on,
+      metal research, or `n/a`, and the diff matches that scope.
+- [ ] **Hosted limitation is proven.** Linux add-on or metal work points to a
+      hosted-lane trace, benchmark, profile, or security proof showing why the
+      hosted contract is insufficient.
+- [ ] **Bottleneck is classified.** The PR names contract work, algorithm, data
+      layout, copy/encoding, syscall/IO, concurrency, scheduler/platform,
+      accelerator, or provider/runtime.
+- [ ] **Budgets are explicit.** Latency p95/p99, allocation/copy/syscall count,
+      queue depth, memory/device budget, retries, timeout, and fallback behavior
+      are stated where relevant.
+- [ ] **Language boundary is justified.** Rust remains the tie-breaker. C, C++,
+      assembly, Zig, Swift, Go, Python, TypeScript, CUDA, Metal, XLA, shader, or
+      vendor SDK code has a named reason, ownership model, error path,
+      cancellation story, test strategy, and macOS impact.
+- [ ] **Accelerator cost is complete.** GPU/TPU/LPU/NPU/Apple Silicon/custom
+      silicon paths account for host-device copies, residency, queue wait,
+      launch count, partitioning/isolation, precision, determinism, telemetry,
+      cancellation, throttling, and fallback.
+- [ ] **Regression gate exists.** A unit/property/scenario/benchmark/trace gate
+      would fail if the claimed bottleneck or authority regression returns.
+
 ## Reviewer sign-off block (paste into the PR review)
 
 ```
