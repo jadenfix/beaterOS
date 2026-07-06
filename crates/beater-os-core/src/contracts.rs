@@ -390,7 +390,10 @@ impl CapabilityGrant {
         if self.denied_actions.contains(&manifest.action_kind) {
             return false;
         }
-        if !self.scope.allows(&manifest.target, &manifest.action_kind) {
+        if !self
+            .scope
+            .allows(scope_selector(manifest), &manifest.action_kind)
+        {
             return false;
         }
         if let Some(max_risk) = self.constraints.max_risk
@@ -461,6 +464,10 @@ impl CapabilityGrant {
             .iter()
             .any(|allowed| host_matches_allowed(&host, allowed))
     }
+}
+
+fn scope_selector(manifest: &ActionManifest) -> &CapabilitySelector {
+    &manifest.target
 }
 
 fn path_is_inside_prefix(path: &str, prefix: &str) -> bool {
