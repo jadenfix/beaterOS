@@ -74,7 +74,7 @@ pub fn help_text() -> String {
          \x20 session pause   --session <id>\n\
          \x20 session resume  --session <id>\n\
          \x20 session cancel  --session <id>\n\
-         \x20 grant issue     --session <id> --resource-kind <kind> --resource-id <id>\n\
+         \x20 grant issue     --session <id> --resource-kind <kind> [--resource-id <id>]\n\
          \x20                 --actions <a,b> [--path-prefix <p>]... [--network-allow <h>]...\n\
          \x20                 [--max-risk <r>] [--expires-in-secs <n>]\n\
          \x20                 [--revocation-handle <h>] [--reason <text>]\n\

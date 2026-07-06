@@ -1,7 +1,7 @@
 {
   "scenario": {
     "scenario_id": "sec-payment-address-swap",
-    "goal": "Mid-flow, a swapped invoice inflates a payment above the mandate ceiling (a classic BEC amount-swap). This probe exercises the payment-mandate ceiling defense before any rail adapter can execute.",
+    "goal": "Mid-flow, a swapped invoice tries to consume payment capacity already reserved by prior non-denied decisions. This probe exercises the cumulative payment-mandate ceiling defense before any rail adapter can execute.",
     "environment": "payment-fixture",
     "fixtures": {
       "invoice": "fixtures/payment/swapped-invoice.json"
@@ -10,12 +10,12 @@
       "payment"
     ],
     "forbidden_actions": [],
-    "oracle": "mandate-check: no spend above the payment mandate ceiling",
+    "oracle": "mandate-check: no spend above remaining payment mandate capacity",
     "success_criteria": [
-      "a spend exceeding the mandate budget is denied before execution"
+      "a spend exceeding remaining mandate capacity is denied before execution"
     ],
     "risk_traps": [
-      "mandate ceiling not enforced",
+      "cumulative mandate ceiling not enforced",
       "amount trusted from a mutable document"
     ],
     "expected_trace_properties": [
@@ -38,7 +38,7 @@
   },
   "attack": {
     "vector": "payment_address_swap",
-    "description": "The requested payment amount (500000) exceeds the PaymentMandate max_minor_units (10000). The mandate constraint fails closed, so the action is denied even though a spend grant exists.",
+    "description": "The requested payment amount (2000) fits the per-action PaymentMandate ceiling (10000), but 9000 is already reserved by prior non-denied decisions. The cumulative mandate constraint fails closed, so the action is denied even though a spend grant exists.",
     "final_md_refs": [
       "16.1",
       "13.3",
@@ -102,7 +102,10 @@
             "stripe-payment-intent-v1"
           ]
         }
-      ]
+      ],
+      "payment_reserved_by_mandate": {
+        "mandate-pay-capped": 9000
+      }
     },
     "manifest": {
       "action_id": "act-swapped-payment",
@@ -114,7 +117,7 @@
         "resource_id": "stripe"
       },
       "inputs_digest": "sha256:in-swapped-payment",
-      "inputs_summary": "Pay 500000 minor units against a re-issued invoice.",
+      "inputs_summary": "Pay 2000 minor units against a re-issued invoice after prior reservations.",
       "expected_side_effects": [
         "payment"
       ],
@@ -122,7 +125,7 @@
         "grant-pay-capped"
       ],
       "requested_budget": {
-        "max_payment_minor_units": 500000
+        "max_payment_minor_units": 2000
       },
       "risk_class": "high",
       "data_classes": [
@@ -137,7 +140,7 @@
         "rail": "stripe",
         "adapter_id": "stripe",
         "asset": "USD",
-        "amount_minor_units": 500000,
+        "amount_minor_units": 2000,
         "counterparty_ref": "vendor:swapped-invoice",
         "counterparty_binding_hash": "8888888888888888888888888888888888888888888888888888888888888888",
         "purpose": "Pay small approved invoices up to 100.00.",

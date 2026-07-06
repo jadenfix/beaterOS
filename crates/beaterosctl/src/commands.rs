@@ -148,7 +148,12 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let projection = store.project(&session_id)?;
 
     let resource_kind: ResourceKind = args::require_enum(args, "resource-kind")?;
-    let raw_resource_id = args.require("resource-id")?;
+    let raw_path_prefixes = args.csv("path-prefix");
+    let raw_resource_id = match args.get("resource-id") {
+        Some(resource_id) => resource_id,
+        None if resource_kind == ResourceKind::FilePath && !raw_path_prefixes.is_empty() => "*",
+        None => return Err(CliError::MissingFlag("resource-id".to_string())),
+    };
     let resource_id = if resource_kind == ResourceKind::FilePath && raw_resource_id != "*" {
         canonicalize_file_authority_or_lexical("resource-id", raw_resource_id)?
     } else {
@@ -173,7 +178,7 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         constraints.max_data_class =
             Some(args::parse_enum::<DataClass>("max-data-class", max_data)?);
     }
-    for prefix in args.csv("path-prefix") {
+    for prefix in raw_path_prefixes {
         constraints
             .path_prefixes
             .insert(canonicalize_existing_file_authority(

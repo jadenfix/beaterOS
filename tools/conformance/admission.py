@@ -435,6 +435,13 @@ def _payment_authorized_by_mandate(manifest: dict, ctx: dict, now: datetime) -> 
         return "payment intent asset does not match mandate asset"
     if intent["amount_minor_units"] > mandate.get("max_minor_units", -1):
         return "payment intent amount exceeds mandate ceiling"
+    already_reserved = (ctx.get("payment_reserved_by_mandate") or {}).get(intent["mandate_id"], 0)
+    if already_reserved + intent["amount_minor_units"] > mandate.get("max_minor_units", -1):
+        return (
+            "payment intent would exceed mandate cumulative ceiling: "
+            f"already reserved {already_reserved}, requested {intent['amount_minor_units']}, "
+            f"ceiling {mandate.get('max_minor_units', -1)}"
+        )
     if intent["purpose"] != mandate.get("purpose"):
         return "payment intent purpose does not match mandate purpose"
     if not _counterparty_policy_allows(

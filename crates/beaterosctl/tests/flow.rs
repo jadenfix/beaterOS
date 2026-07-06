@@ -243,6 +243,184 @@ fn full_coding_workflow_end_to_end() {
 }
 
 #[test]
+fn file_path_prefix_grant_defaults_to_wildcard_selector_when_resource_id_is_omitted() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let repo = home.child_dir("repo");
+    let repo_file = PathBuf::from(&repo)
+        .join("src")
+        .join("main.rs")
+        .display()
+        .to_string();
+    let session = "sess-prefix-default";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "agent-coder",
+            "--workspace",
+            "ws-repo",
+            "--goal",
+            "edit workspace files",
+        ],
+    );
+
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--actions",
+            "write",
+            "--path-prefix",
+            &repo,
+            "--reason",
+            "workspace write",
+        ],
+    );
+    assert!(
+        grant_out.contains("scope:   FilePath *"),
+        "file_path path-prefix grant should default selector to wildcard:\n{grant_out}"
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id in output");
+
+    let allow = ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "fs.write",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            &repo_file,
+            "--resolved-target",
+            &repo_file,
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-write-inside",
+            "--summary",
+            "edit main.rs",
+        ],
+    );
+    assert!(
+        allow.contains("Allowed"),
+        "in-prefix write should be allowed by wildcard selector plus path-prefix:\n{allow}"
+    );
+
+    let denied = ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "fs.write",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/etc/passwd",
+            "--resolved-target",
+            "/etc/passwd",
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-write-outside",
+        ],
+    );
+    assert!(
+        denied.contains("NeedsNarrowedGrant"),
+        "wildcard selector must remain narrowed by the path-prefix constraint:\n{denied}"
+    );
+}
+
+#[test]
+fn grant_issue_without_resource_id_still_fails_without_file_path_prefix() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-missing-resource-id";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "agent-coder",
+            "--workspace",
+            "ws-repo",
+            "--goal",
+            "check grant shape",
+        ],
+    );
+
+    let missing_file_target = cli(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--actions",
+            "read",
+        ],
+    )
+    .expect_err("file_path grant without resource-id or path-prefix must fail closed");
+    assert!(
+        matches!(missing_file_target, CliError::MissingFlag(ref flag) if flag == "resource-id"),
+        "unexpected error: {missing_file_target}"
+    );
+
+    let missing_network_target = cli(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "network_endpoint",
+            "--actions",
+            "read",
+            "--path-prefix",
+            &h,
+        ],
+    )
+    .expect_err("non-file grant without resource-id must fail closed");
+    assert!(
+        matches!(missing_network_target, CliError::MissingFlag(ref flag) if flag == "resource-id"),
+        "unexpected error: {missing_network_target}"
+    );
+}
+
+#[test]
 fn receipt_is_refused_without_admitted_action() {
     let home = TempHome::new();
     let h = home.as_str();

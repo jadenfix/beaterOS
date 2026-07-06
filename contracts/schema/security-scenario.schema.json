@@ -60,6 +60,11 @@
             "policy_version": { "type": "string" },
             "grants": { "type": "array", "items": { "$ref": "capability-grant.schema.json" } },
             "mandates": { "type": "array", "items": { "$ref": "payment-mandate.schema.json" } },
+            "payment_reserved_by_mandate": {
+              "type": "object",
+              "description": "Replay-derived reserved payment capacity by mandate_id. Scenario probes use this to exercise cumulative mandate ceilings without embedding a whole prior journal.",
+              "additionalProperties": { "$ref": "common.schema.json#/$defs/uint" }
+            },
             "approvals": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/approval_evidence" } },
             "simulations": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/simulation_evidence" } }
           }

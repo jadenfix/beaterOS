@@ -22,11 +22,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use beater_os_core::{
-    ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, CapabilityGrant,
+    ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, CapabilityGrant,
     CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult, DelegationMode,
-    InMemoryJournal, JournalEvent, JournalRecord, PaymentMandate, PolicyDecision, PolicyEngine,
-    ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence,
-    ToolManifest,
+    HashValue, InMemoryJournal, JournalEvent, JournalRecord, PaymentMandate, PolicyDecision,
+    PolicyEngine, ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass,
+    SimulationEvidence, ToolManifest,
 };
 use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
@@ -209,6 +209,14 @@ pub struct AdmissionOutcome {
     pub proposal_record: JournalRecord,
     pub decision_record: JournalRecord,
     pub decision: PolicyDecision,
+    pub receipt_root_hash: HashValue,
+}
+
+/// Result of appending a receipt through the daemon boundary.
+#[derive(Debug, Clone)]
+pub struct ReceiptAppendOutcome {
+    pub receipt_record: JournalRecord,
+    pub receipt: CapabilityReceipt,
 }
 
 /// Durable lifecycle transition applied by the daemon store.
@@ -705,6 +713,10 @@ impl Store {
             }
 
             let now = Utc::now();
+            let payment_reserved_by_mandate = payment_reserved_by_mandate_excluding(
+                &admission_state,
+                manifest.action_id.as_str(),
+            );
             let mut revoked_handles = admission_state.revoked_handles;
             revoked_handles.extend(external_revoked_handles);
             let ctx = AdmissionContext {
@@ -716,6 +728,7 @@ impl Store {
                 approvals: admission_state.approvals,
                 simulations: admission_state.simulations,
                 mandates: admission_state.mandates.into_values().collect(),
+                payment_reserved_by_mandate,
                 revoked_handles,
                 tool_registry: self.options.tool_registry.clone(),
                 require_registered_tools: self.options.require_registered_tools,
@@ -742,11 +755,15 @@ impl Store {
             )?;
             records_to_write.push(decision_record.clone());
             journal.verify_chain()?;
+            let receipt_root_hash = self
+                .receipt_ledger_from_journal_unlocked(session_id)?
+                .root_hash();
             self.write_journal_records_unlocked(session_id, records_to_write.iter())?;
             Ok(AdmissionOutcome {
                 proposal_record,
                 decision_record,
                 decision,
+                receipt_root_hash,
             })
         })
     }
@@ -760,19 +777,35 @@ impl Store {
         input: CapabilityReceiptInput,
         created_at: DateTime<Utc>,
     ) -> DaemonResult<CapabilityReceipt> {
+        Ok(self
+            .append_receipt_with_record(session_id, input, created_at)?
+            .receipt)
+    }
+
+    /// Build and persist a receipt and return the exact `ReceiptAppended`
+    /// journal record that made it durable.
+    pub fn append_receipt_with_record(
+        &self,
+        session_id: &str,
+        input: CapabilityReceiptInput,
+        created_at: DateTime<Utc>,
+    ) -> DaemonResult<ReceiptAppendOutcome> {
         self.with_session_lock(session_id, || {
             let projection = self.project_unlocked(session_id)?;
             ensure_session_running(&projection.session)?;
             let mut ledger = self.receipt_ledger_from_journal_unlocked(session_id)?;
             let receipt = ledger.append(input)?;
-            self.append_event_unlocked(
+            let receipt_record = self.append_event_unlocked(
                 session_id,
                 JournalEvent::ReceiptAppended {
                     receipt: receipt.clone(),
                 },
                 created_at,
             )?;
-            Ok(receipt)
+            Ok(ReceiptAppendOutcome {
+                receipt_record,
+                receipt,
+            })
         })
     }
 
@@ -1177,6 +1210,7 @@ struct AdmissionState {
     issued_revocation_handles: BTreeSet<String>,
     event_ids: BTreeSet<String>,
     mandates: BTreeMap<String, PaymentMandate>,
+    payment_reserved_by_mandate: BTreeMap<String, u64>,
     proposals: BTreeMap<String, ProposedAction>,
     latest_decisions: BTreeMap<String, PolicyDecision>,
     approvals: Vec<ApprovalEvidence>,
@@ -1198,6 +1232,7 @@ fn admission_state_from_journal(
     let mut issued_revocation_handles = BTreeSet::new();
     let mut event_ids = BTreeSet::new();
     let mut mandates = BTreeMap::new();
+    let mut payment_reserved_by_mandate = BTreeMap::new();
     let mut proposals = BTreeMap::new();
     let mut latest_decisions = BTreeMap::new();
     let mut approvals = Vec::new();
@@ -1292,6 +1327,25 @@ fn admission_state_from_journal(
             "session {session_id} journal has no SessionCreated event"
         ))
     })?;
+    for (action_id, decision) in &latest_decisions {
+        if !reserves_payment_capacity(decision.result.clone()) {
+            continue;
+        }
+        let Some(proposal) = proposals.get(action_id) else {
+            continue;
+        };
+        if !is_payment_manifest(&proposal.manifest) {
+            continue;
+        }
+        let Some(intent) = &proposal.manifest.payment_intent else {
+            continue;
+        };
+        let entry = payment_reserved_by_mandate
+            .entry(intent.mandate_id.clone())
+            .or_insert(0_u64);
+        *entry = entry.saturating_add(intent.amount_minor_units);
+    }
+
     Ok(AdmissionState {
         session,
         grants,
@@ -1299,11 +1353,54 @@ fn admission_state_from_journal(
         issued_revocation_handles,
         event_ids,
         mandates,
+        payment_reserved_by_mandate,
         proposals,
         latest_decisions,
         approvals,
         simulations,
     })
+}
+
+fn reserves_payment_capacity(result: beater_os_core::DecisionResult) -> bool {
+    matches!(
+        result,
+        beater_os_core::DecisionResult::Allowed
+            | beater_os_core::DecisionResult::NeedsApproval
+            | beater_os_core::DecisionResult::NeedsSimulation
+    )
+}
+
+fn payment_reserved_by_mandate_excluding(
+    state: &AdmissionState,
+    excluded_action_id: &str,
+) -> BTreeMap<String, u64> {
+    let mut reserved = state.payment_reserved_by_mandate.clone();
+    let Some(decision) = state.latest_decisions.get(excluded_action_id) else {
+        return reserved;
+    };
+    if !reserves_payment_capacity(decision.result.clone()) {
+        return reserved;
+    }
+    let Some(proposal) = state.proposals.get(excluded_action_id) else {
+        return reserved;
+    };
+    let Some(intent) = proposal.manifest.payment_intent.as_ref() else {
+        return reserved;
+    };
+    if let Some(entry) = reserved.get_mut(&intent.mandate_id) {
+        *entry = entry.saturating_sub(intent.amount_minor_units);
+        if *entry == 0 {
+            reserved.remove(&intent.mandate_id);
+        }
+    }
+    reserved
+}
+
+fn is_payment_manifest(manifest: &ActionManifest) -> bool {
+    manifest.action_kind == ActionKind::Spend
+        || manifest
+            .expected_side_effects
+            .contains(&SideEffectClass::Payment)
 }
 
 fn journal_event_id(event: &JournalEvent) -> Option<&str> {
