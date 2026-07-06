@@ -878,7 +878,7 @@ fn policy_requires_action_bound_simulation_evidence() {
         simulation_id: "sim-1".to_string(),
         action_id: "different-action".to_string(),
         manifest_hash: manifest_hash(&manifest),
-        scenario_id: "deploy-scenario".to_string(),
+        scenario_id: "action:action-1:high-risk-side-effect-simulation".to_string(),
         passed_at: now,
         policy_version: "policy-v1".to_string(),
     });
@@ -886,6 +886,12 @@ fn policy_requires_action_bound_simulation_evidence() {
     assert_eq!(decision.result, DecisionResult::NeedsSimulation);
 
     ctx.simulations[0].action_id = "action-1".to_string();
+    ctx.simulations[0].scenario_id = "scenario:wrong".to_string();
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsSimulation);
+
+    ctx.simulations[0].scenario_id =
+        "action:action-1:high-risk-side-effect-simulation".to_string();
     let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::Allowed);
 }
@@ -931,7 +937,7 @@ fn policy_rejects_simulation_evidence_for_stale_manifest_hash() {
         simulation_id: "sim-1".to_string(),
         action_id: "action-1".to_string(),
         manifest_hash: manifest_hash(&stale_manifest),
-        scenario_id: "deploy-scenario".to_string(),
+        scenario_id: "action:action-1:high-risk-side-effect-simulation".to_string(),
         passed_at: now,
         policy_version: "policy-v1".to_string(),
     });
@@ -977,7 +983,7 @@ fn policy_rejects_future_dated_simulation_evidence() {
         simulation_id: "sim-1".to_string(),
         action_id: "action-1".to_string(),
         manifest_hash: manifest_hash(&manifest),
-        scenario_id: "deploy-scenario".to_string(),
+        scenario_id: "action:action-1:high-risk-side-effect-simulation".to_string(),
         passed_at: now + Duration::minutes(1),
         policy_version: "policy-v1".to_string(),
     });

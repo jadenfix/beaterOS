@@ -2,7 +2,25 @@
 
 Date: 2026-07-03
 
-Status: research plan and system design plan only. This document intentionally does not implement code.
+Status: research plan is being translated into executable engineering gates and matrix-backed acceptance criteria in beaterOS.
+
+## 1a. Current Execution Slice (beaterOS bare-metal buildout)
+
+The current active work is converting the metal-lane contract into enforced infrastructure:
+
+- `docs/engineering/bare-metal-readiness.md` as the lane contract.
+- `scripts/collect-bare-metal-host-profile.py` as deterministic host capture.
+- `scripts/check-bare-metal-readiness.py` as the readiness gate.
+- `scripts/run-bare-metal-e2e-matrix.py` as deterministic multi-host lane matrix CI coverage.
+- `scripts/local-e2e.py` + CI workflow as the repeated gate entrypoint.
+- `docs/engineering/bare-metal-e2e-matrix.json` as configurable host-case fixtures.
+
+Language/implementation direction used by this execution slice:
+
+- Rust: control-plane authority, policy, sessions, journaling, journals/receipts interfaces.
+- C / C++: driver-adjacent/ABI-boundary work when vendor or platform constraints require it.
+- CUDA / Metal / kernel languages: accelerator and IO hot paths after profiling proves that boundary is on critical path.
+- Go / Python / TypeScript: infra scripts, build helpers, simulation harnesses, UI or service adapters at non-TCB seams.
 
 Repo objective: define what must be true for beaterOS to become a successful agent-first operating system, from first principles, with enough detail to guide future engineering, security review, simulation, and product choices.
 

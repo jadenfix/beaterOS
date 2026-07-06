@@ -95,5 +95,54 @@
         "max_queue_depth": 24
       }
     }
-  ]
+  ],
+  "architecture": {
+    "control_plane_lane": "portable-control-plane",
+    "migration_order": [
+      "portable-control-plane",
+      "apple-metal-lane",
+      "linux-cuda-lane"
+    ],
+    "lanes": [
+      {
+        "name": "portable-control-plane",
+        "profile": "portable-host-control-plane",
+        "mandatory": true,
+        "required_stability_tier": "stable",
+        "workload_classes": [
+          "control-plane",
+          "policy-admission",
+          "journaling",
+          "tool-gateway"
+        ],
+        "fallback_chain": ["portable-host-control-plane"]
+      },
+      {
+        "name": "apple-metal-lane",
+        "profile": "apple-silicon-benchmark-host",
+        "mandatory": false,
+        "depends_on": ["portable-control-plane"],
+        "required_stability_tier": "experimental",
+        "workload_classes": [
+          "benchmarks",
+          "media",
+          "apple-metal-integration"
+        ],
+        "fallback_chain": ["portable-host-control-plane"]
+      },
+      {
+        "name": "linux-cuda-lane",
+        "profile": "linux-cuda-scored-host",
+        "mandatory": false,
+        "depends_on": ["portable-control-plane"],
+        "required_stability_tier": "beta",
+        "workload_classes": [
+          "batch-policy",
+          "tooling",
+          "cuda-scoring"
+        ],
+        "fallback_chain": ["portable-host-control-plane"]
+      }
+    ]
+  }
 }
