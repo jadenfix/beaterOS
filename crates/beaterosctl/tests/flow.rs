@@ -598,6 +598,114 @@ fn help_is_available() {
     let out = ok(&home.as_str(), &["help"]);
     assert!(out.contains("beaterosctl"));
     assert!(out.contains("session create"));
+    assert!(out.contains("--revocation-handle <h>"));
+    assert!(out.contains("--revoked-handle <h>"));
+}
+
+#[test]
+fn action_propose_honors_revoked_handle_registry() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-revoked-handle";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a",
+            "--workspace",
+            "w",
+            "--goal",
+            "g",
+        ],
+    );
+
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "/repo/a",
+            "--actions",
+            "read",
+            "--revocation-handle",
+            "revoke:repo-a",
+        ],
+    );
+    assert!(
+        grant_out.contains("revokes: revoke:repo-a"),
+        "grant output should expose the revocation handle:\n{grant_out}"
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id");
+
+    let allowed = ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "fs.read",
+            "--kind",
+            "read",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/repo/a",
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-before-revoke",
+        ],
+    );
+    assert!(allowed.contains("Allowed"), "{allowed}");
+
+    let denied = ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "fs.read",
+            "--kind",
+            "read",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/repo/a",
+            "--grants",
+            &grant_id,
+            "--revoked-handle",
+            "revoke:repo-a",
+            "--action-id",
+            "act-after-revoke",
+        ],
+    );
+    assert!(
+        denied.contains("Denied"),
+        "revoked handle must fail closed at admission:\n{denied}"
+    );
+    assert!(
+        denied.contains("revoked, expired, or missing"),
+        "denial should name the revoked authority boundary:\n{denied}"
+    );
 }
 
 /// Set up a session with a write grant and one admitted write action `act-ok`.
