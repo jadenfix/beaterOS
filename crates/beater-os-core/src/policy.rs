@@ -348,7 +348,12 @@ impl PolicyEngine {
 
         if effective.risk >= RiskClass::High
             && side_effects_have_external_effect(&effective.side_effects)
-            && !has_passed_simulation_for_action(manifest, &manifest_hash, ctx)
+            && !has_passed_simulation_for_action(
+                manifest,
+                &manifest_hash,
+                ctx,
+                &required_simulation_id(manifest),
+            )
         {
             return Ok(decision(
                 manifest,
@@ -357,10 +362,7 @@ impl PolicyEngine {
                 DecisionResult::NeedsSimulation,
                 matched_rules,
                 "high-risk external side effects require a passed simulation before execution",
-                DecisionFollowup::simulation(format!(
-                    "action:{}:high-risk-side-effect-simulation",
-                    manifest.action_id
-                )),
+                DecisionFollowup::simulation(required_simulation_id(manifest)),
             ));
         }
 
@@ -719,13 +721,22 @@ fn has_passed_simulation_for_action(
     manifest: &ActionManifest,
     manifest_hash: &HashValue,
     ctx: &AdmissionContext,
+    required_simulation: &str,
 ) -> bool {
     ctx.simulations.iter().any(|simulation| {
         simulation.passed_at <= ctx.now
             && simulation.action_id == manifest.action_id
             && simulation.manifest_hash == *manifest_hash
             && simulation.policy_version == ctx.policy_version
+            && simulation.scenario_id == required_simulation
     })
+}
+
+fn required_simulation_id(manifest: &ActionManifest) -> String {
+    format!(
+        "action:{}:high-risk-side-effect-simulation",
+        manifest.action_id
+    )
 }
 
 fn decision(

@@ -544,6 +544,42 @@ fn exploit_read_secret_outside_prefix_is_denied() {
     );
 }
 
+#[test]
+fn undeclared_subprocess_exec_is_denied() {
+    let home = TempDir::new("home");
+    let work = TempDir::new("work");
+    let h = home.canonical();
+    let workdir = work.canonical();
+    let session = "sess-exec-deny";
+
+    create_session(&h, session);
+    let grant_id = issue_grant(
+        &h,
+        session,
+        &["--actions", "execute", "--path-prefix", &workdir],
+    );
+
+    let out = execute_script(
+        &h,
+        session,
+        &grant_id,
+        &workdir,
+        "act-exec-deny",
+        "/bin/ls >/dev/null",
+    );
+
+    assert!(
+        !out.contains("execution:   ok"),
+        "shell must not be able to pivot into undeclared binaries:\n{out}"
+    );
+    assert!(
+        out.contains("execution:   failed") || out.contains("execution:   signaled"),
+        "denied exec must surface as an unsuccessful child status:\n{out}"
+    );
+    let verify = ok(&h, &["journal", "verify", "--session", session]);
+    assert!(verify.contains("journal OK"), "{verify}");
+}
+
 /// A legitimate in-prefix write still succeeds and the receipt truthfully
 /// records the OBSERVED effect (the fs-diff + certified LocalWrite), while a
 /// no-op command certifies NO effect even if the agent declared one.

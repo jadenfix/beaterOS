@@ -22,10 +22,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use beater_os_core::{
-    ActionManifest, AdmissionContext, AgentSession, CapabilityGrant, CapabilityReceipt,
-    CapabilityReceiptInput, CapabilityScope, DelegationMode, InMemoryJournal, JournalEvent,
-    JournalRecord, PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger, RiskClass,
-    SideEffectClass, ToolManifest,
+    ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, CapabilityGrant,
+    CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult, DelegationMode,
+    InMemoryJournal, JournalEvent, JournalRecord, PaymentMandate, PolicyDecision, PolicyEngine,
+    ReceiptLedger, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, ToolManifest,
 };
 use chrono::{DateTime, Utc};
 
@@ -35,7 +35,8 @@ const SESSIONS_DIR: &str = "sessions";
 const JOURNAL_FILE: &str = "journal.jsonl";
 const RECEIPTS_FILE: &str = "receipts.jsonl";
 const LOCK_SUFFIX: &str = ".lock";
-const DAEMON_POLICY_VERSION: &str = "beateros-policy-v0";
+/// Policy contract version enforced by daemon-owned authority writes.
+pub const DAEMON_POLICY_VERSION: &str = "beateros-policy-v0";
 
 /// Runtime-store configuration.
 #[derive(Debug, Clone)]
@@ -64,9 +65,29 @@ impl Default for StoreOptions {
 fn default_tool_registry() -> BTreeMap<String, ToolManifest> {
     BTreeMap::from([
         tool_manifest(
+            "fs.write",
+            RiskClass::Low,
+            [SideEffectClass::LocalWrite],
+            false,
+        ),
+        tool_manifest("t", RiskClass::Low, [SideEffectClass::LocalWrite], false),
+        tool_manifest("shell", RiskClass::Low, [], true),
+        tool_manifest(
+            "deployer",
+            RiskClass::High,
+            [SideEffectClass::Deployment],
+            false,
+        ),
+        tool_manifest(
             "tool:test",
             RiskClass::Low,
             [SideEffectClass::LocalWrite],
+            false,
+        ),
+        tool_manifest(
+            "tool:deploy",
+            RiskClass::High,
+            [SideEffectClass::Deployment],
             false,
         ),
         tool_manifest(
@@ -113,7 +134,36 @@ pub struct SessionProjection {
     pub grants: Vec<CapabilityGrant>,
     pub mandates: Vec<PaymentMandate>,
     pub manifests: Vec<ActionManifest>,
+    pub decisions: Vec<PolicyDecision>,
+    pub approvals: Vec<ApprovalEvidence>,
+    pub simulations: Vec<SimulationEvidence>,
     pub receipts: Vec<CapabilityReceipt>,
+}
+
+impl SessionProjection {
+    /// Grants that are active at `now`, projected from daemon-owned journal state.
+    pub fn active_grants(&self, now: DateTime<Utc>) -> Vec<CapabilityGrant> {
+        self.grants
+            .iter()
+            .filter(|grant| grant.is_active_at(now))
+            .cloned()
+            .collect()
+    }
+
+    /// Proposed manifest for `action_id`, if the daemon has journaled it.
+    pub fn manifest(&self, action_id: &str) -> Option<&ActionManifest> {
+        self.manifests
+            .iter()
+            .find(|manifest| manifest.action_id == action_id)
+    }
+
+    /// Latest policy decision for `action_id`, if one exists.
+    pub fn latest_decision(&self, action_id: &str) -> Option<&PolicyDecision> {
+        self.decisions
+            .iter()
+            .rev()
+            .find(|decision| decision.action_id == action_id)
+    }
 }
 
 /// Result of a daemon-owned policy admission transaction.
@@ -122,6 +172,14 @@ pub struct AdmissionOutcome {
     pub proposal_record: JournalRecord,
     pub decision_record: JournalRecord,
     pub decision: PolicyDecision,
+}
+
+/// Durable lifecycle transition applied by the daemon store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionTransition {
+    Pause,
+    Resume,
+    Cancel,
 }
 
 impl Store {
@@ -142,6 +200,34 @@ impl Store {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Whether a session exists and its journal genesis verifies.
+    pub fn session_exists(&self, session_id: &str) -> DaemonResult<bool> {
+        self.with_session_lock(session_id, || self.session_exists_unlocked(session_id))
+    }
+
+    /// List session ids with valid journal files, sorted for deterministic CLI output.
+    pub fn list_sessions(&self) -> DaemonResult<Vec<String>> {
+        let dir = self.root.join(SESSIONS_DIR);
+        let mut out = Vec::new();
+        if !dir.is_dir() {
+            return Ok(out);
+        }
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if name.ends_with(LOCK_SUFFIX) || validate_session_id(&name).is_err() {
+                continue;
+            }
+            if let Ok(true) = self.session_exists(&name) {
+                out.push(name);
+            }
+        }
+        out.sort();
+        Ok(out)
     }
 
     /// Create a session and write its genesis journal record under the
@@ -167,6 +253,32 @@ impl Store {
         })
     }
 
+    /// Apply a daemon-owned session lifecycle transition under the per-session
+    /// writer lock. The current core journal has no dedicated lifecycle event,
+    /// so this records an authoritative session snapshot with the new status.
+    pub fn transition_session(
+        &self,
+        session_id: &str,
+        transition: SessionTransition,
+        created_at: DateTime<Utc>,
+    ) -> DaemonResult<JournalRecord> {
+        self.with_session_lock(session_id, || {
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let mut projection = self.project_unlocked(session_id)?;
+            projection.session.status =
+                next_session_status(transition, &projection.session.status)?;
+            let record = journal.append(
+                JournalEvent::SessionCreated {
+                    session: projection.session,
+                },
+                created_at,
+            )?;
+            journal.verify_chain()?;
+            self.write_journal_record_unlocked(session_id, &record)?;
+            Ok(record)
+        })
+    }
+
     /// Append one non-authority journal event while holding the per-session
     /// writer lock.
     ///
@@ -180,6 +292,12 @@ impl Store {
         created_at: DateTime<Utc>,
     ) -> DaemonResult<JournalRecord> {
         match event {
+            JournalEvent::SessionCreated { .. } => {
+                return Err(DaemonError::Refused(
+                    "SessionCreated must be written through create_session or transition_session"
+                        .to_string(),
+                ));
+            }
             JournalEvent::CapabilityGranted { .. } => {
                 return Err(DaemonError::Refused(
                     "CapabilityGranted must be written through issue_grant".to_string(),
@@ -206,10 +324,59 @@ impl Store {
                     "PolicyDecided must be written through admit_action".to_string(),
                 ));
             }
+            JournalEvent::ApprovalRecorded { .. } => {
+                return Err(DaemonError::Refused(
+                    "ApprovalRecorded must be written through record_approval".to_string(),
+                ));
+            }
+            JournalEvent::SimulationRecorded { .. } => {
+                return Err(DaemonError::Refused(
+                    "SimulationRecorded must be written through record_simulation".to_string(),
+                ));
+            }
             _ => {}
         }
         self.with_session_lock(session_id, || {
             self.append_event_unlocked(session_id, event, created_at)
+        })
+    }
+
+    /// Record action-bound human approval evidence through the daemon boundary.
+    pub fn record_approval(
+        &self,
+        session_id: &str,
+        approval: ApprovalEvidence,
+        created_at: DateTime<Utc>,
+    ) -> DaemonResult<JournalRecord> {
+        self.with_session_lock(session_id, || {
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            ensure_session_running(&admission_state.session)?;
+            validate_approval_evidence(&admission_state, &approval)?;
+            let record = journal.append(JournalEvent::ApprovalRecorded { approval }, created_at)?;
+            journal.verify_chain()?;
+            self.write_journal_record_unlocked(session_id, &record)?;
+            Ok(record)
+        })
+    }
+
+    /// Record action-bound passed simulation evidence through the daemon boundary.
+    pub fn record_simulation(
+        &self,
+        session_id: &str,
+        simulation: SimulationEvidence,
+        created_at: DateTime<Utc>,
+    ) -> DaemonResult<JournalRecord> {
+        self.with_session_lock(session_id, || {
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            ensure_session_running(&admission_state.session)?;
+            validate_simulation_evidence(&admission_state, &simulation)?;
+            let record =
+                journal.append(JournalEvent::SimulationRecorded { simulation }, created_at)?;
+            journal.verify_chain()?;
+            self.write_journal_record_unlocked(session_id, &record)?;
+            Ok(record)
         })
     }
 
@@ -235,6 +402,7 @@ impl Store {
             }
             let mut journal = self.load_journal_unlocked(session_id)?;
             let admission_state = admission_state_from_journal(session_id, &journal)?;
+            ensure_session_running(&admission_state.session)?;
             if grant.holder != admission_state.session.agent_id {
                 return Err(DaemonError::Refused(format!(
                     "grant {} holder {} does not match session agent {}",
@@ -266,6 +434,7 @@ impl Store {
         self.with_session_lock(session_id, || {
             let mut journal = self.load_journal_unlocked(session_id)?;
             let admission_state = admission_state_from_journal(session_id, &journal)?;
+            ensure_session_running(&admission_state.session)?;
             if mandate.session_id != session_id {
                 return Err(DaemonError::Refused(format!(
                     "payment mandate {} is bound to session {}, not {session_id}",
@@ -308,11 +477,12 @@ impl Store {
             }
             let mut journal = self.load_journal_unlocked(session_id)?;
             let admission_state = admission_state_from_journal(session_id, &journal)?;
+            ensure_session_running(&admission_state.session)?;
             let existing_proposal = admission_state.proposals.get(manifest.action_id.as_str());
             if let Some(decision) = admission_state
                 .latest_decisions
                 .get(manifest.action_id.as_str())
-                && decision.result == beater_os_core::DecisionResult::Allowed
+                && decision.result == DecisionResult::Allowed
             {
                 return Err(DaemonError::Refused(format!(
                     "action {} already has an allowed policy decision",
@@ -335,8 +505,8 @@ impl Store {
                 session_id: admission_state.session.session_id,
                 policy_version: DAEMON_POLICY_VERSION.to_string(),
                 grants: admission_state.grants.into_values().collect(),
-                approvals: Vec::new(),
-                simulations: Vec::new(),
+                approvals: admission_state.approvals,
+                simulations: admission_state.simulations,
                 mandates: admission_state.mandates.into_values().collect(),
                 revoked_handles: BTreeSet::new(),
                 tool_registry: self.options.tool_registry.clone(),
@@ -383,9 +553,8 @@ impl Store {
         created_at: DateTime<Utc>,
     ) -> DaemonResult<CapabilityReceipt> {
         self.with_session_lock(session_id, || {
-            if !self.session_exists_unlocked(session_id)? {
-                return Err(DaemonError::SessionNotFound(session_id.to_string()));
-            }
+            let projection = self.project_unlocked(session_id)?;
+            ensure_session_running(&projection.session)?;
             let mut ledger = self.receipt_ledger_from_journal_unlocked(session_id)?;
             let receipt = ledger.append(input)?;
             self.append_event_unlocked(
@@ -397,6 +566,43 @@ impl Store {
             )?;
             Ok(receipt)
         })
+    }
+
+    /// Run one execution callback while holding the per-session daemon lock,
+    /// then append the returned receipt input before releasing the lock.
+    ///
+    /// This is the minimal runtime lease for local tool execution: lifecycle
+    /// transitions and competing daemon writes cannot interleave between the
+    /// running-session check and durable receipt append.
+    pub fn execute_and_append_receipt<T, E>(
+        &self,
+        session_id: &str,
+        created_at: DateTime<Utc>,
+        execute: impl FnOnce(&SessionProjection) -> Result<(CapabilityReceiptInput, T), E>,
+    ) -> Result<(CapabilityReceipt, T), E>
+    where
+        E: From<DaemonError>,
+    {
+        let _lock = self.acquire_session_lock(session_id).map_err(E::from)?;
+        let projection = self.project_unlocked(session_id).map_err(E::from)?;
+        ensure_session_running(&projection.session).map_err(E::from)?;
+        let (input, outcome) = execute(&projection)?;
+        let mut ledger = self
+            .receipt_ledger_from_journal_unlocked(session_id)
+            .map_err(E::from)?;
+        let receipt = ledger
+            .append(input)
+            .map_err(DaemonError::from)
+            .map_err(E::from)?;
+        self.append_event_unlocked(
+            session_id,
+            JournalEvent::ReceiptAppended {
+                receipt: receipt.clone(),
+            },
+            created_at,
+        )
+        .map_err(E::from)?;
+        Ok((receipt, outcome))
     }
 
     /// Load and verify a session journal under the writer lock so readers never
@@ -473,6 +679,7 @@ impl Store {
         let journal = InMemoryJournal::from_records(records);
         journal.verify_chain()?;
         ensure_genesis(session_id, &journal)?;
+        verify_session_snapshots(session_id, &journal)?;
         Ok(journal)
     }
 
@@ -498,6 +705,9 @@ impl Store {
         let mut grants = Vec::new();
         let mut mandates = Vec::new();
         let mut manifests = Vec::new();
+        let mut decisions = Vec::new();
+        let mut approvals = Vec::new();
+        let mut simulations = Vec::new();
         let mut receipts = Vec::new();
         for record in journal.records() {
             match &record.event {
@@ -509,9 +719,13 @@ impl Store {
                 JournalEvent::ActionProposed { manifest } => {
                     manifests.push(manifest.as_ref().clone())
                 }
+                JournalEvent::PolicyDecided { decision } => decisions.push(decision.clone()),
+                JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
+                JournalEvent::SimulationRecorded { simulation } => {
+                    simulations.push(simulation.clone())
+                }
                 JournalEvent::ReceiptAppended { receipt } => receipts.push(receipt.clone()),
-                JournalEvent::PolicyDecided { .. }
-                | JournalEvent::MemoryWritten { .. }
+                JournalEvent::MemoryWritten { .. }
                 | JournalEvent::ScenarioEvaluated { .. }
                 | JournalEvent::IncidentAnnotated { .. } => {}
             }
@@ -526,6 +740,9 @@ impl Store {
             grants,
             mandates,
             manifests,
+            decisions,
+            approvals,
+            simulations,
             receipts,
         })
     }
@@ -637,12 +854,99 @@ fn ensure_genesis(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<(
     }
 }
 
+fn verify_session_snapshots(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<()> {
+    let Some(first_record) = journal.records().first() else {
+        return Err(DaemonError::SessionNotFound(session_id.to_string()));
+    };
+    let JournalEvent::SessionCreated { session: baseline } = &first_record.event else {
+        return Err(DaemonError::Refused(format!(
+            "session {session_id} journal does not start with SessionCreated"
+        )));
+    };
+
+    let mut current_status = baseline.status.clone();
+    for record in journal.records().iter().skip(1) {
+        let JournalEvent::SessionCreated { session } = &record.event else {
+            continue;
+        };
+        if !same_session_identity_and_authority(baseline, session) {
+            return Err(DaemonError::Refused(format!(
+                "session {session_id} lifecycle snapshot at seq {} changes immutable session authority",
+                record.seq
+            )));
+        }
+        if !valid_status_step(&current_status, &session.status) {
+            return Err(DaemonError::Refused(format!(
+                "session {session_id} lifecycle snapshot at seq {} has illegal status transition {:?} -> {:?}",
+                record.seq, current_status, session.status
+            )));
+        }
+        current_status = session.status.clone();
+    }
+    Ok(())
+}
+
+fn same_session_identity_and_authority(left: &AgentSession, right: &AgentSession) -> bool {
+    left.session_id == right.session_id
+        && left.created_at == right.created_at
+        && left.created_by == right.created_by
+        && left.agent_id == right.agent_id
+        && left.workspace_id == right.workspace_id
+        && left.goal == right.goal
+        && left.constraints == right.constraints
+        && left.policy_profile == right.policy_profile
+        && left.initial_capability_ids == right.initial_capability_ids
+        && left.budget == right.budget
+        && left.model_policy == right.model_policy
+        && left.memory_scope == right.memory_scope
+        && left.journal_root == right.journal_root
+}
+
+fn valid_status_step(current: &SessionStatus, next: &SessionStatus) -> bool {
+    matches!(
+        (current, next),
+        (SessionStatus::Running, SessionStatus::Paused)
+            | (SessionStatus::Paused, SessionStatus::Running)
+            | (SessionStatus::Running, SessionStatus::Canceled)
+            | (SessionStatus::Paused, SessionStatus::Canceled)
+    )
+}
+
+fn ensure_session_running(session: &AgentSession) -> DaemonResult<()> {
+    if session.status == SessionStatus::Running {
+        Ok(())
+    } else {
+        Err(DaemonError::Refused(format!(
+            "session {} is not running (status {:?})",
+            session.session_id, session.status
+        )))
+    }
+}
+
+fn next_session_status(
+    transition: SessionTransition,
+    current: &SessionStatus,
+) -> DaemonResult<SessionStatus> {
+    match (transition, current) {
+        (SessionTransition::Pause, SessionStatus::Running) => Ok(SessionStatus::Paused),
+        (SessionTransition::Resume, SessionStatus::Paused) => Ok(SessionStatus::Running),
+        (SessionTransition::Cancel, SessionStatus::Running | SessionStatus::Paused) => {
+            Ok(SessionStatus::Canceled)
+        }
+        _ => Err(DaemonError::Refused(format!(
+            "illegal session transition {transition:?} from status {current:?}"
+        ))),
+    }
+}
+
 struct AdmissionState {
     session: AgentSession,
     grants: BTreeMap<String, CapabilityGrant>,
     mandates: BTreeMap<String, PaymentMandate>,
     proposals: BTreeMap<String, ProposedAction>,
     latest_decisions: BTreeMap<String, PolicyDecision>,
+    approvals: Vec<ApprovalEvidence>,
+    simulations: Vec<SimulationEvidence>,
 }
 
 struct ProposedAction {
@@ -659,6 +963,8 @@ fn admission_state_from_journal(
     let mut mandates = BTreeMap::new();
     let mut proposals = BTreeMap::new();
     let mut latest_decisions = BTreeMap::new();
+    let mut approvals = Vec::new();
+    let mut simulations = Vec::new();
     for record in journal.records() {
         match &record.event {
             JournalEvent::SessionCreated { session: created } => {
@@ -682,6 +988,8 @@ fn admission_state_from_journal(
             JournalEvent::PolicyDecided { decision } => {
                 latest_decisions.insert(decision.action_id.clone(), decision.clone());
             }
+            JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
+            JournalEvent::SimulationRecorded { simulation } => simulations.push(simulation.clone()),
             JournalEvent::ReceiptAppended { .. }
             | JournalEvent::MemoryWritten { .. }
             | JournalEvent::ScenarioEvaluated { .. }
@@ -699,7 +1007,101 @@ fn admission_state_from_journal(
         mandates,
         proposals,
         latest_decisions,
+        approvals,
+        simulations,
     })
+}
+
+fn validate_approval_evidence(
+    state: &AdmissionState,
+    approval: &ApprovalEvidence,
+) -> DaemonResult<()> {
+    if approval.policy_version != DAEMON_POLICY_VERSION {
+        return Err(DaemonError::Refused(format!(
+            "approval {} uses unsupported policy version {}",
+            approval.review_id, approval.policy_version
+        )));
+    }
+    let Some(proposal) = state.proposals.get(&approval.action_id) else {
+        return Err(DaemonError::Refused(format!(
+            "approval {} references unproposed action {}",
+            approval.review_id, approval.action_id
+        )));
+    };
+    if proposal.manifest.digest()? != approval.manifest_hash {
+        return Err(DaemonError::Refused(format!(
+            "approval {} manifest hash does not match action {}",
+            approval.review_id, approval.action_id
+        )));
+    }
+    if !state.grants.contains_key(&approval.grant_id) {
+        return Err(DaemonError::Refused(format!(
+            "approval {} references unknown grant {}",
+            approval.review_id, approval.grant_id
+        )));
+    }
+    if approval.approved_at < proposal.record.created_at {
+        return Err(DaemonError::Refused(format!(
+            "approval {} predates action proposal {}",
+            approval.review_id, approval.action_id
+        )));
+    }
+    Ok(())
+}
+
+fn validate_simulation_evidence(
+    state: &AdmissionState,
+    simulation: &SimulationEvidence,
+) -> DaemonResult<()> {
+    if simulation.policy_version != DAEMON_POLICY_VERSION {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} uses unsupported policy version {}",
+            simulation.simulation_id, simulation.policy_version
+        )));
+    }
+    let Some(proposal) = state.proposals.get(&simulation.action_id) else {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} references unproposed action {}",
+            simulation.simulation_id, simulation.action_id
+        )));
+    };
+    if proposal.manifest.digest()? != simulation.manifest_hash {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} manifest hash does not match action {}",
+            simulation.simulation_id, simulation.action_id
+        )));
+    }
+    if simulation.passed_at < proposal.record.created_at {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} predates action proposal {}",
+            simulation.simulation_id, simulation.action_id
+        )));
+    }
+    let Some(decision) = state.latest_decisions.get(simulation.action_id.as_str()) else {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} references action {} without a policy decision",
+            simulation.simulation_id, simulation.action_id
+        )));
+    };
+    if decision.result != DecisionResult::NeedsSimulation {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} references action {} without a latest NeedsSimulation decision",
+            simulation.simulation_id, simulation.action_id
+        )));
+    }
+    let Some(required_simulation) = &decision.required_simulation else {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} references action {} whose decision has no simulation requirement",
+            simulation.simulation_id, simulation.action_id
+        )));
+    };
+    if &simulation.scenario_id != required_simulation {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} scenario {} does not match required simulation {}",
+            simulation.simulation_id, simulation.scenario_id, required_simulation
+        )));
+    }
+    Ok(())
 }
 
 fn validate_grant_authority(state: &AdmissionState, grant: &CapabilityGrant) -> DaemonResult<()> {
