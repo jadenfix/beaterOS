@@ -196,14 +196,24 @@ fn within_optional_limit(requested: Option<u64>, limit: Option<u64>) -> bool {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelPolicy {
     #[serde(default)]
     pub allowed_routes: BTreeSet<String>,
     #[serde(default)]
     pub local_only: bool,
-    #[serde(default)]
+    #[serde(default = "default_max_data_class")]
     pub max_data_class: Option<DataClass>,
+}
+
+impl Default for ModelPolicy {
+    fn default() -> Self {
+        Self {
+            allowed_routes: BTreeSet::new(),
+            local_only: false,
+            max_data_class: default_max_data_class(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,11 +279,40 @@ impl CapabilityScope {
     }
 }
 
+/// Default risk ceiling for a grant. An absent `max_risk` must fail closed at a
+/// bounded ceiling, never at "unlimited". Callers that genuinely want no ceiling
+/// opt in explicitly with `max_risk: null`.
+fn default_max_risk() -> Option<RiskClass> {
+    Some(RiskClass::Medium)
+}
+
+/// Default data-class ceiling for model routes and grants. See
+/// [`default_max_risk`]: absence must fail closed at a bounded class, not at
+/// "unlimited".
+fn default_max_data_class() -> Option<DataClass> {
+    Some(DataClass::Internal)
+}
+
+/// Constraints attached to a capability grant.
+///
+/// Two defaulting models coexist here, and the asymmetry is deliberate:
+///
+/// - `max_risk` / `max_data_class` are **safety ceilings**. An omitted field
+///   fails closed at the bounded cap (see [`default_max_risk`] /
+///   [`default_max_data_class`]); "no ceiling" must be an explicit, auditable
+///   `null`. This is why they do not use a plain `#[serde(default)]`, which for
+///   `Option<T>` would be `None` (unbounded) — a fail-open on a partial object.
+/// - `budget`, `network_allowlist`, and `path_prefixes` are **additive
+///   restrictions**, not safety caps. An omitted/empty value adds no restriction
+///   from this grant: an empty allowlist/prefix set means "this grant imposes no
+///   extra network/path bound", and an all-`None` budget defers to the session
+///   budget. Absence here is intentionally permissive, not a fail-open, so a
+///   plain `#[serde(default)]` is correct for them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantConstraints {
-    #[serde(default)]
+    #[serde(default = "default_max_risk")]
     pub max_risk: Option<RiskClass>,
-    #[serde(default)]
+    #[serde(default = "default_max_data_class")]
     pub max_data_class: Option<DataClass>,
     #[serde(default)]
     pub budget: Budget,
@@ -286,8 +325,8 @@ pub struct GrantConstraints {
 impl Default for GrantConstraints {
     fn default() -> Self {
         Self {
-            max_risk: Some(RiskClass::Medium),
-            max_data_class: Some(DataClass::Internal),
+            max_risk: default_max_risk(),
+            max_data_class: default_max_data_class(),
             budget: Budget::default(),
             network_allowlist: BTreeSet::new(),
             path_prefixes: BTreeSet::new(),
@@ -301,6 +340,13 @@ pub struct CapabilityGrant {
     pub issuer: String,
     pub holder: String,
     pub session_id: String,
+    /// Grant this one was delegated (attenuated) from, if any. A delegated grant
+    /// is authority *indirected* through its parent: it is only exercisable
+    /// while the whole ancestor chain is live, so revoking a parent transitively
+    /// revokes every descendant (`final.md` §6.2; issue #10). A root grant
+    /// issued directly to a principal has no parent.
+    #[serde(default)]
+    pub parent_grant_id: Option<String>,
     pub scope: CapabilityScope,
     #[serde(default)]
     pub denied_actions: BTreeSet<ActionKind>,
@@ -322,9 +368,16 @@ impl CapabilityGrant {
         !self.revoked && self.expires_at > now
     }
 
+    /// Whether this grant admits `manifest` at the given `effective_risk`.
+    ///
+    /// `effective_risk` is the kernel-derived effective risk (see
+    /// `policy::derived_risk_floor`), never the raw agent-asserted
+    /// `manifest.risk_class`: the `max_risk` ceiling is checked against it so the
+    /// agent can only raise risk above the kernel floor, never lower it below.
     pub fn allows_manifest(
         &self,
         manifest: &ActionManifest,
+        effective_risk: RiskClass,
         now: DateTime<Utc>,
         actor_id: &str,
     ) -> bool {
@@ -341,7 +394,7 @@ impl CapabilityGrant {
             return false;
         }
         if let Some(max_risk) = self.constraints.max_risk
-            && manifest.risk_class > max_risk
+            && effective_risk > max_risk
         {
             return false;
         }

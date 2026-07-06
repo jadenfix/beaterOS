@@ -1,6 +1,13 @@
 [workspace]
 members = [
     "crates/beater-os-core",
+    "crates/beater-os-audit",
+    "crates/beater-os-memory",
+    "crates/beater-os-sandbox",
+    "crates/beater-os-session",
+    "crates/beater-osd",
+    "crates/beater-os-tool-registry",
+    "crates/beaterosctl",
 ]
 resolver = "2"
 
