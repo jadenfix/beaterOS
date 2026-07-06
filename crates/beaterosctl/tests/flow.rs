@@ -319,6 +319,150 @@ fn receipt_is_refused_without_admitted_action() {
 }
 
 #[test]
+fn unregistered_tool_is_denied_by_cli_admission() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-tool-registry";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a1",
+            "--workspace",
+            "w1",
+            "--goal",
+            "g",
+        ],
+    );
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "/repo/x",
+            "--actions",
+            "write",
+        ],
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id");
+
+    let denied = ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "unknown-tool",
+            "--kind",
+            "write",
+            "--target-kind",
+            "file_path",
+            "--target",
+            "/repo/x",
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-unknown-tool",
+            "--side-effects",
+            "local_write",
+        ],
+    );
+
+    assert!(denied.contains("Denied"), "{denied}");
+    assert!(denied.contains("not registered"), "{denied}");
+}
+
+#[test]
+fn registered_deployment_tool_cannot_be_laundered_as_execute_by_cli() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let session = "sess-tool-launder";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "a1",
+            "--workspace",
+            "w1",
+            "--goal",
+            "g",
+        ],
+    );
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "tool",
+            "--resource-id",
+            "deployer",
+            "--actions",
+            "execute",
+        ],
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .map(str::to_string)
+        .expect("grant id");
+
+    let denied = ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "deployer",
+            "--kind",
+            "execute",
+            "--target-kind",
+            "tool",
+            "--target",
+            "deployer",
+            "--grants",
+            &grant_id,
+            "--action-id",
+            "act-deploy-as-exec",
+            "--side-effects",
+            "deployment",
+            "--idempotency-key",
+            "deploy-idem",
+        ],
+    );
+
+    assert!(denied.contains("Denied"), "{denied}");
+    assert!(denied.contains("deploy action kind"), "{denied}");
+}
+
+#[test]
 fn unknown_session_fails_closed() {
     let home = TempHome::new();
     let h = home.as_str();

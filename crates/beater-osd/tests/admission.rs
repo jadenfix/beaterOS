@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -11,9 +11,9 @@ use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityScope,
     CapabilitySelector, DataClass, DecisionResult, DelegationMode, GrantConstraints, JournalEvent,
     PaymentIntent, PaymentMandate, PolicyDecision, ResourceKind, RiskClass, SessionStatus,
-    SideEffectClass,
+    SideEffectClass, ToolManifest,
 };
-use beater_osd::{DaemonError, Store};
+use beater_osd::{DaemonError, Store, StoreOptions};
 use chrono::{TimeDelta, Utc};
 use uuid::Uuid;
 
@@ -126,6 +126,7 @@ fn payment_mandate(session_id: &str) -> PaymentMandate {
 
 fn payment_manifest(session_id: &str, action_id: &str) -> ActionManifest {
     let mut manifest = manifest(session_id, action_id);
+    manifest.tool_id = "tool:payment".to_string();
     manifest.action_kind = ActionKind::Spend;
     manifest.target.resource_kind = ResourceKind::PaymentRail;
     manifest.target.resource_id = "stablecoin:x402".to_string();
@@ -193,7 +194,7 @@ fn manifest(session_id: &str, action_id: &str) -> ActionManifest {
         inputs_digest: "input-digest".to_string(),
         inputs_summary: "write output".to_string(),
         expected_outputs: Vec::new(),
-        expected_side_effects: BTreeSet::new(),
+        expected_side_effects: BTreeSet::from([SideEffectClass::LocalWrite]),
         required_grants: BTreeSet::from(["grant-write".to_string()]),
         requested_budget: Budget::default(),
         risk_class: RiskClass::Low,
@@ -243,6 +244,23 @@ fn create_store_with_initial<const N: usize>(
 
 fn append_grant(store: &Store, session_id: &str, grant: CapabilityGrant) {
     store.issue_grant(session_id, grant, Utc::now()).unwrap();
+}
+
+fn registered_tool(
+    tool_id: &str,
+    risk_class: RiskClass,
+    side_effects: impl IntoIterator<Item = SideEffectClass>,
+) -> ToolManifest {
+    ToolManifest {
+        tool_id: tool_id.to_string(),
+        publisher: "beater.local".to_string(),
+        version: "1.0.0".to_string(),
+        transport: "local".to_string(),
+        required_capabilities: Vec::new(),
+        side_effects: side_effects.into_iter().collect(),
+        risk_class,
+        sandbox_required: false,
+    }
 }
 
 #[test]
@@ -367,6 +385,63 @@ fn issued_payment_mandate_is_projected_into_admission() {
             .decision
             .matched_rules
             .contains(&"payment_authorized_by_mandate".to_string())
+    );
+}
+
+#[test]
+fn unregistered_tool_denies_through_daemon_admission() {
+    let (_root, store) = create_store_with_session("admit-unregistered", "sess_unregistered");
+    let session_id = "sess_unregistered";
+    append_grant(&store, session_id, grant(session_id));
+
+    let mut manifest = manifest(session_id, "act-unregistered");
+    manifest.tool_id = "tool:unknown".to_string();
+
+    let outcome = store.admit_action(session_id, manifest).unwrap();
+
+    assert_eq!(outcome.decision.result, DecisionResult::Denied);
+    assert!(
+        outcome.decision.explanation.contains("not registered"),
+        "{}",
+        outcome.decision.explanation
+    );
+}
+
+#[test]
+fn registered_deployment_tool_cannot_be_laundered_as_execute_through_daemon() {
+    let root = TempDir::new("admit-deploy-launder");
+    let store = Store::open_with_options(
+        &root.path,
+        StoreOptions {
+            tool_registry: BTreeMap::from([(
+                "tool:deploy".to_string(),
+                registered_tool(
+                    "tool:deploy",
+                    RiskClass::High,
+                    [SideEffectClass::Deployment],
+                ),
+            )]),
+            ..StoreOptions::default()
+        },
+    )
+    .unwrap();
+    let session_id = "sess_deploy_launder";
+    store.create_session(&session(&root, session_id)).unwrap();
+    append_grant(&store, session_id, grant(session_id));
+
+    let mut manifest = manifest(session_id, "act-deploy-launder");
+    manifest.tool_id = "tool:deploy".to_string();
+    manifest.action_kind = ActionKind::Execute;
+    manifest.expected_side_effects = BTreeSet::from([SideEffectClass::Deployment]);
+    manifest.idempotency_key = Some("deploy-idem".to_string());
+
+    let outcome = store.admit_action(session_id, manifest).unwrap();
+
+    assert_eq!(outcome.decision.result, DecisionResult::Denied);
+    assert!(
+        outcome.decision.explanation.contains("deploy action kind"),
+        "{}",
+        outcome.decision.explanation
     );
 }
 

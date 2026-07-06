@@ -1,10 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use beater_os_core::{
     ActionKind, ActionManifest, AdmissionContext, AgentSession, Budget, CapabilityGrant,
     CapabilityReceiptInput, CapabilityScope, CapabilitySelector, DataClass, DecisionResult,
     GrantConstraints, JournalEvent, PolicyEngine, ResourceKind, RiskClass, SessionStatus,
-    SideEffectClass, hash_json,
+    SideEffectClass, ToolManifest, hash_json,
 };
 use beater_os_sandbox::{
     SandboxLimits, SandboxRequest, command_digest, execute as sandbox_execute,
@@ -307,6 +307,8 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         simulations: Vec::new(),
         mandates: projection.mandates.clone(),
         revoked_handles: std::collections::BTreeSet::new(),
+        tool_registry: local_tool_registry(),
+        require_registered_tools: true,
     };
     // `admit` is fallible because it digests the manifest; propagate any
     // hashing error rather than pretending a decision was reached.
@@ -485,6 +487,8 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         simulations: Vec::new(),
         mandates: projection.mandates.clone(),
         revoked_handles: std::collections::BTreeSet::new(),
+        tool_registry: local_tool_registry(),
+        require_registered_tools: true,
     };
     let decision = PolicyEngine::new().admit(&manifest, &ctx)?;
     store.append_event(
@@ -876,6 +880,46 @@ fn default_side_effect(action_kind: &ActionKind) -> Option<SideEffectClass> {
         | ActionKind::Submit
         | ActionKind::AskHuman => None,
     }
+}
+
+fn local_tool_registry() -> BTreeMap<String, ToolManifest> {
+    BTreeMap::from([
+        tool_manifest(
+            "fs.write",
+            RiskClass::Low,
+            [SideEffectClass::LocalWrite],
+            false,
+        ),
+        tool_manifest("t", RiskClass::Low, [SideEffectClass::LocalWrite], false),
+        tool_manifest(
+            "deployer",
+            RiskClass::High,
+            [SideEffectClass::Deployment],
+            false,
+        ),
+        tool_manifest("shell", RiskClass::Low, [], true),
+    ])
+}
+
+fn tool_manifest<const N: usize>(
+    tool_id: &str,
+    risk_class: RiskClass,
+    side_effects: [SideEffectClass; N],
+    sandbox_required: bool,
+) -> (String, ToolManifest) {
+    (
+        tool_id.to_string(),
+        ToolManifest {
+            tool_id: tool_id.to_string(),
+            publisher: "beater.local".to_string(),
+            version: "1.0.0".to_string(),
+            transport: "local".to_string(),
+            required_capabilities: Vec::new(),
+            side_effects: side_effects.into_iter().collect(),
+            risk_class,
+            sandbox_required,
+        },
+    )
 }
 
 fn describe_decision(decision: Option<&DecisionResult>) -> String {

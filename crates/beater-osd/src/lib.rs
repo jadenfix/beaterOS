@@ -24,7 +24,8 @@ use std::time::{Duration, Instant};
 use beater_os_core::{
     ActionManifest, AdmissionContext, AgentSession, CapabilityGrant, CapabilityReceipt,
     CapabilityReceiptInput, CapabilityScope, DelegationMode, InMemoryJournal, JournalEvent,
-    JournalRecord, PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger,
+    JournalRecord, PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger, RiskClass,
+    SideEffectClass, ToolManifest,
 };
 use chrono::{DateTime, Utc};
 
@@ -43,6 +44,10 @@ pub struct StoreOptions {
     pub lock_timeout: Duration,
     /// Sleep interval between bounded lock-acquire attempts.
     pub lock_poll_interval: Duration,
+    /// Kernel-owned local tool registry used to ground daemon policy admission.
+    pub tool_registry: BTreeMap<String, ToolManifest>,
+    /// Deny actions whose tool is absent from [`Self::tool_registry`].
+    pub require_registered_tools: bool,
 }
 
 impl Default for StoreOptions {
@@ -50,8 +55,48 @@ impl Default for StoreOptions {
         Self {
             lock_timeout: Duration::from_secs(2),
             lock_poll_interval: Duration::from_millis(2),
+            tool_registry: default_tool_registry(),
+            require_registered_tools: true,
         }
     }
+}
+
+fn default_tool_registry() -> BTreeMap<String, ToolManifest> {
+    BTreeMap::from([
+        tool_manifest(
+            "tool:test",
+            RiskClass::Low,
+            [SideEffectClass::LocalWrite],
+            false,
+        ),
+        tool_manifest(
+            "tool:payment",
+            RiskClass::High,
+            [SideEffectClass::Payment],
+            false,
+        ),
+    ])
+}
+
+fn tool_manifest(
+    tool_id: &str,
+    risk_class: RiskClass,
+    side_effects: impl IntoIterator<Item = SideEffectClass>,
+    sandbox_required: bool,
+) -> (String, ToolManifest) {
+    (
+        tool_id.to_string(),
+        ToolManifest {
+            tool_id: tool_id.to_string(),
+            publisher: "beater.local".to_string(),
+            version: "1.0.0".to_string(),
+            transport: "local".to_string(),
+            required_capabilities: Vec::new(),
+            side_effects: side_effects.into_iter().collect(),
+            risk_class,
+            sandbox_required,
+        },
+    )
 }
 
 /// Durable daemon-owned store for sessions, journals, and receipt ledgers.
@@ -294,6 +339,8 @@ impl Store {
                 simulations: Vec::new(),
                 mandates: admission_state.mandates.into_values().collect(),
                 revoked_handles: BTreeSet::new(),
+                tool_registry: self.options.tool_registry.clone(),
+                require_registered_tools: self.options.require_registered_tools,
             };
             let decision = PolicyEngine::new().admit(&manifest, &ctx)?;
             let mut records_to_write = Vec::new();
