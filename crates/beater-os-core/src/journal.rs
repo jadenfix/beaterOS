@@ -148,13 +148,7 @@ impl InMemoryJournal {
 
     pub fn verify_chain(&self) -> BeaterOsResult<JournalVerificationReport> {
         let mut prev_hash = GENESIS_HASH.to_string();
-        let mut proposed_actions: BTreeMap<String, ActionManifest> = BTreeMap::new();
-        let mut issued_grants: BTreeMap<String, CapabilityGrant> = BTreeMap::new();
-        let mut allowed_decisions: BTreeMap<String, HashValue> = BTreeMap::new();
-        let mut latest_decision_by_action: BTreeMap<String, DecisionResult> = BTreeMap::new();
-        let mut review_ids: BTreeMap<String, ()> = BTreeMap::new();
-        let mut simulation_ids: BTreeMap<String, ()> = BTreeMap::new();
-        let mut receipt_chain = Vec::new();
+        let mut causality = CausalityState::default();
         for (idx, record) in self.records.iter().enumerate() {
             let expected_seq = idx as u64;
             if record.seq != expected_seq {
@@ -178,16 +172,7 @@ impl InMemoryJournal {
                     found: record.hash.clone(),
                 });
             }
-            verify_event_causality(
-                record,
-                &mut proposed_actions,
-                &mut issued_grants,
-                &mut allowed_decisions,
-                &mut latest_decision_by_action,
-                &mut review_ids,
-                &mut simulation_ids,
-                &mut receipt_chain,
-            )?;
+            verify_event_causality(record, &mut causality)?;
             prev_hash = record.hash.clone();
         }
         Ok(JournalVerificationReport {
@@ -197,22 +182,30 @@ impl InMemoryJournal {
     }
 }
 
+#[derive(Default)]
+struct CausalityState {
+    proposed_actions: BTreeMap<String, ActionManifest>,
+    issued_grants: BTreeMap<String, CapabilityGrant>,
+    allowed_decisions: BTreeMap<String, HashValue>,
+    latest_decision_by_action: BTreeMap<String, DecisionResult>,
+    review_ids: BTreeMap<String, ()>,
+    simulation_ids: BTreeMap<String, ()>,
+    receipt_chain: Vec<CapabilityReceipt>,
+}
+
 fn verify_event_causality(
     record: &JournalRecord,
-    proposed_actions: &mut BTreeMap<String, ActionManifest>,
-    issued_grants: &mut BTreeMap<String, CapabilityGrant>,
-    allowed_decisions: &mut BTreeMap<String, HashValue>,
-    latest_decision_by_action: &mut BTreeMap<String, DecisionResult>,
-    review_ids: &mut BTreeMap<String, ()>,
-    simulation_ids: &mut BTreeMap<String, ()>,
-    receipt_chain: &mut Vec<CapabilityReceipt>,
+    state: &mut CausalityState,
 ) -> BeaterOsResult<()> {
     match &record.event {
         JournalEvent::CapabilityGranted { grant } => {
-            issued_grants.insert(grant.grant_id.clone(), grant.clone());
+            state
+                .issued_grants
+                .insert(grant.grant_id.clone(), grant.clone());
         }
         JournalEvent::ActionProposed { manifest } => {
-            if proposed_actions
+            if state
+                .proposed_actions
                 .insert(manifest.action_id.clone(), manifest.as_ref().clone())
                 .is_some()
             {
@@ -223,7 +216,7 @@ fn verify_event_causality(
             }
         }
         JournalEvent::PolicyDecided { decision } => {
-            let Some(manifest) = proposed_actions.get(&decision.action_id) else {
+            let Some(manifest) = state.proposed_actions.get(&decision.action_id) else {
                 return causality_error(
                     record.seq,
                     format!(
@@ -242,16 +235,23 @@ fn verify_event_causality(
                     ),
                 );
             }
-            latest_decision_by_action.insert(decision.action_id.clone(), decision.result.clone());
+            state
+                .latest_decision_by_action
+                .insert(decision.action_id.clone(), decision.result.clone());
             if decision.result == DecisionResult::Allowed {
-                allowed_decisions
+                state
+                    .allowed_decisions
                     .insert(decision.action_id.clone(), decision.manifest_hash.clone());
             } else {
-                allowed_decisions.remove(&decision.action_id);
+                state.allowed_decisions.remove(&decision.action_id);
             }
         }
         JournalEvent::ApprovalRecorded { approval } => {
-            if review_ids.insert(approval.review_id.clone(), ()).is_some() {
+            if state
+                .review_ids
+                .insert(approval.review_id.clone(), ())
+                .is_some()
+            {
                 return causality_error(
                     record.seq,
                     format!(
@@ -260,7 +260,7 @@ fn verify_event_causality(
                     ),
                 );
             }
-            let Some(manifest) = proposed_actions.get(&approval.action_id) else {
+            let Some(manifest) = state.proposed_actions.get(&approval.action_id) else {
                 return causality_error(
                     record.seq,
                     format!(
@@ -278,7 +278,7 @@ fn verify_event_causality(
                     ),
                 );
             }
-            if !issued_grants.contains_key(&approval.grant_id) {
+            if !state.issued_grants.contains_key(&approval.grant_id) {
                 return causality_error(
                     record.seq,
                     format!(
@@ -287,7 +287,7 @@ fn verify_event_causality(
                     ),
                 );
             }
-            if latest_decision_by_action.get(&approval.action_id)
+            if state.latest_decision_by_action.get(&approval.action_id)
                 != Some(&DecisionResult::NeedsApproval)
             {
                 return causality_error(
@@ -306,7 +306,8 @@ fn verify_event_causality(
             }
         }
         JournalEvent::SimulationRecorded { simulation } => {
-            if simulation_ids
+            if state
+                .simulation_ids
                 .insert(simulation.simulation_id.clone(), ())
                 .is_some()
             {
@@ -318,7 +319,7 @@ fn verify_event_causality(
                     ),
                 );
             }
-            let Some(manifest) = proposed_actions.get(&simulation.action_id) else {
+            let Some(manifest) = state.proposed_actions.get(&simulation.action_id) else {
                 return causality_error(
                     record.seq,
                     format!(
@@ -336,7 +337,7 @@ fn verify_event_causality(
                     ),
                 );
             }
-            if latest_decision_by_action.get(&simulation.action_id)
+            if state.latest_decision_by_action.get(&simulation.action_id)
                 != Some(&DecisionResult::NeedsSimulation)
             {
                 return causality_error(
@@ -355,7 +356,7 @@ fn verify_event_causality(
             }
         }
         JournalEvent::ReceiptAppended { receipt } => {
-            let Some(manifest) = proposed_actions.get(&receipt.action_id) else {
+            let Some(manifest) = state.proposed_actions.get(&receipt.action_id) else {
                 return causality_error(
                     record.seq,
                     format!(
@@ -364,8 +365,10 @@ fn verify_event_causality(
                     ),
                 );
             };
-            let Some(allowed_manifest_hash) = allowed_decisions.get(&receipt.action_id) else {
-                let latest = latest_decision_by_action
+            let Some(allowed_manifest_hash) = state.allowed_decisions.get(&receipt.action_id)
+            else {
+                let latest = state
+                    .latest_decision_by_action
                     .get(&receipt.action_id)
                     .map(|result| format!("{result:?}"))
                     .unwrap_or_else(|| "missing".to_string());
@@ -430,8 +433,8 @@ fn verify_event_causality(
                     ),
                 );
             }
-            receipt_chain.push(receipt.clone());
-            ReceiptLedger::from_receipts(receipt_chain.clone()).verify_chain()?;
+            state.receipt_chain.push(receipt.clone());
+            ReceiptLedger::from_receipts(state.receipt_chain.clone()).verify_chain()?;
         }
         JournalEvent::SessionCreated { .. }
         | JournalEvent::PaymentMandateIssued { .. }

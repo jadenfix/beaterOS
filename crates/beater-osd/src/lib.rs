@@ -158,9 +158,8 @@ impl Store {
             if name.ends_with(LOCK_SUFFIX) || validate_session_id(&name).is_err() {
                 continue;
             }
-            match self.session_exists(&name) {
-                Ok(true) => out.push(name),
-                Ok(false) | Err(_) => {}
+            if let Ok(true) = self.session_exists(&name) {
+                out.push(name);
             }
         }
         out.sort();
