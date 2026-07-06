@@ -501,6 +501,14 @@ impl ToolRegistry {
                     key_id: signature.key_id.clone(),
                 });
             }
+            if signature.publisher != tool.manifest.publisher {
+                return Err(RegistryError::SignaturePublisherMismatch {
+                    tool_id: tool_id.clone(),
+                    version: version.clone(),
+                    signature_publisher: signature.publisher.clone(),
+                    manifest_publisher: tool.manifest.publisher.clone(),
+                });
+            }
             let expected_signed_digest =
                 tool_signature_digest(&tool.manifest, &tool.content_digest).map_err(|err| {
                     RegistryError::SignaturePreimageDigestFailed {

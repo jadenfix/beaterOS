@@ -477,7 +477,7 @@ fn mutations_emit_audit_events() {
 }
 
 #[test]
-fn registration_audit_event_uses_signature_publisher() {
+fn signature_publisher_must_match_signed_manifest_publisher() {
     let mut reg = permissive_registry();
     let mut tool = signed_tool("fs.read", "1.0.0", RiskClass::Low, false);
     tool.manifest.publisher = "spoofed.example".to_string();
@@ -486,14 +486,11 @@ fn registration_audit_event_uses_signature_publisher() {
             tool_signature_digest(&tool.manifest, &tool.content_digest).expect("signature digest");
     }
 
-    reg.register(tool).expect("register");
-    let event = reg.events().last().expect("registered event");
+    let err = reg
+        .register(tool)
+        .expect_err("signature publisher must be bound to signed manifest publisher");
     assert!(
-        matches!(
-            event,
-            beater_os_tool_registry::RegistryEvent::Registered { publisher, .. }
-                if publisher == PUBLISHER
-        ),
-        "registered event must record the authoritative signature publisher: {event:?}"
+        matches!(err, RegistryError::SignaturePublisherMismatch { .. }),
+        "{err}"
     );
 }

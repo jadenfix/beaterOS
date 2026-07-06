@@ -55,6 +55,16 @@ pub enum RegistryError {
         publisher: String,
     },
 
+    #[error(
+        "signature publisher {signature_publisher} for {tool_id}@{version} does not match manifest publisher {manifest_publisher}"
+    )]
+    SignaturePublisherMismatch {
+        tool_id: String,
+        version: String,
+        signature_publisher: String,
+        manifest_publisher: String,
+    },
+
     #[error("signature for {tool_id}@{version} covers digest {signed}, not the tool's {actual}")]
     SignatureDigestMismatch {
         tool_id: String,
