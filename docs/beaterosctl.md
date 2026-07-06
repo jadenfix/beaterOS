@@ -115,10 +115,12 @@ filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
 2. **Admit.** An `ActionManifest` (`action_kind = execute`, kernel-derived
    `resolved_target`) is admitted by `PolicyEngine` — no admission logic in the
    CLI. `ActionProposed` and `PolicyDecided` are journaled.
-3. **Execute only if `Allowed`.** The confined child runs with a **scrubbed
-   environment** (`env_clear` + a minimal `PATH` — no inherited secrets), a
-   **wall-clock timeout**, and **capped** stdout/stderr. Otherwise the decision
-   is printed and nothing runs.
+3. **Execute only if `Allowed`.** The confined child runs under macOS Seatbelt
+   with filesystem writes limited to granted prefixes, network denied by
+   default, and process execution limited to the resolved entry executable. It
+   also gets a **scrubbed environment** (`env_clear` + a minimal `PATH` — no
+   inherited secrets), a **wall-clock timeout**, and **capped** stdout/stderr.
+   Otherwise the decision is printed and nothing runs.
 4. **Filesystem-diff receipt.** The confined directory is snapshotted (path ->
    SHA-256) before and after; the created/modified/deleted diff is the observed
    side effect. A `CapabilityReceipt` (input digest = command+args, output digest
@@ -144,9 +146,8 @@ action <id>
 ```
 
 Number of sandbox lanes is a compromise beaterOS accepts (§26); this is the
-single portable local lane. Network isolation, seccomp/AppArmor/cgroups, and
-container/VM lanes (§10.6, §13.8) are explicit future targets, not silently
-assumed here.
+macOS local lane. Linux `seccomp`/Landlock/cgroups and container/VM lanes
+(§10.6, §13.8) are explicit future targets, not silently assumed here.
 
 ## Invariants preserved
 
