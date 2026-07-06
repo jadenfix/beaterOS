@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import io
 import json
+import sys
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ SPEC = importlib.util.spec_from_file_location("check_bare_metal_readiness", str(
 if SPEC is None or SPEC.loader is None:
     raise SystemExit(f"unable to load checker module from {CHECKER_PATH}")
 checker = importlib.util.module_from_spec(SPEC)
+sys.modules["check_bare_metal_readiness"] = checker
 SPEC.loader.exec_module(checker)
 
 DEFAULT_MATRIX: list[dict[str, Any]] = [
@@ -280,7 +282,7 @@ def _validate_cases(case_matrix: list[dict[str, Any]], manifest: dict[str, Any])
         if migration_phase is not None and migration_phase not in checker.KNOWN_MIGRATION_PHASES:
             errors.append(
                 f"{case_name}: require_migration_phase must be one of: "
-                f"{', '.join(sorted(checker.KNOWN_MIGRATION_PHASES)}",
+                f"{', '.join(sorted(checker.KNOWN_MIGRATION_PHASES))}",
             )
 
         if raw_routes is not None and isinstance(raw_routes, dict):
