@@ -336,6 +336,9 @@ fn help_is_available() {
     let out = ok(&home.as_str(), &["help"]);
     assert!(out.contains("beaterosctl"));
     assert!(out.contains("session create"));
+    assert!(out.contains("Runs <cmd> directly"));
+    assert!(out.contains("there is no implicit shell"));
+    assert!(out.contains("--command /bin/sh --arg -c"));
 }
 
 /// Set up a session with a write grant and one admitted write action `act-ok`.

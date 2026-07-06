@@ -37,7 +37,7 @@ from `beater-os-core` and re-verifies them; nothing is ever rewritten in place.
 | `session show` | Summarize one session's grants, actions, decisions, receipts. |
 | `grant issue` | Issue a scoped `CapabilityGrant` and journal `CapabilityGranted`. |
 | `action propose` | Journal an `ActionProposed`, run policy admission, journal `PolicyDecided`. |
-| `action execute` | Run a scoped shell action through the **sandbox execution lane**: canonicalize + confine `--cwd`, admit, and (only if `Allowed`) execute confined and journal a filesystem-diff `CapabilityReceipt`. |
+| `action execute` | Run one scoped program with explicit argv through the **sandbox execution lane**: canonicalize + confine `--cwd`, admit, and (only if `Allowed`) execute confined and journal a filesystem-diff `CapabilityReceipt`. |
 | `receipt record` | Record a `CapabilityReceipt` for an **admitted** action (fails closed otherwise). |
 | `journal verify` | Verify the journal and receipt hash chains and causality. |
 | `trace show` | Render the full trace: session, grants, actions, decisions, receipts. |
@@ -116,6 +116,20 @@ filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
    `ReceiptAppended` and persisted — reusing the same store path as
    `receipt record`, so no receipt can exist without a prior `Allowed` decision.
 
+`--command` is executed directly as the child program, and each repeated `--arg`
+becomes one argv entry. There is no implicit shell, so redirects, pipes, globs,
+environment expansion, and `&&` are not interpreted:
+
+```console
+# Direct program execution: creates /abs/work/out.txt without a shell.
+$ beaterosctl action execute --session demo --tool touch \
+    --command touch --arg out.txt \
+    --cwd /abs/work --grants <grant-id> --side-effects local_write
+```
+
+When a shell pipeline is intentionally required, request the shell explicitly.
+It is still confined by the same sandbox and grant-derived prefixes:
+
 ```console
 # Execute grant confined to a canonical work directory.
 $ beaterosctl grant issue --session demo --resource-kind file_path \
@@ -123,7 +137,7 @@ $ beaterosctl grant issue --session demo --resource-kind file_path \
 issued grant <grant-id>
 
 $ beaterosctl action execute --session demo --tool shell \
-    --command sh --arg -c --arg 'printf hi > out.txt' \
+    --command /bin/sh --arg -c --arg 'printf hi > out.txt' \
     --cwd /abs/work --grants <grant-id> --side-effects local_write
 action <id>
   decision:    Allowed
@@ -155,8 +169,8 @@ assumed here.
 
 This crate deliberately does **not** implement session lifecycle transitions
 (pause/resume/cancel) or tool registration. Those are separate backlog slices
-(`session-runtime`, `tool-registry`). The scoped shell **sandbox lane** is now
-implemented (`action execute`, via `beater-os-sandbox`); richer lanes (network,
-container/VM, browser) remain future targets. When the `beater-osd` runtime
-lands, `beaterosctl` should delegate session mutation to it rather than
+(`session-runtime`, `tool-registry`). The scoped local program **sandbox lane**
+is now implemented (`action execute`, via `beater-os-sandbox`); richer lanes
+(network, container/VM, browser) remain future targets. When the `beater-osd`
+runtime lands, `beaterosctl` should delegate session mutation to it rather than
 journaling transitions directly.

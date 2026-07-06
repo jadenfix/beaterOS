@@ -83,6 +83,9 @@ pub fn help_text() -> String {
          \x20                 --cwd <dir> --grants <g1,g2> [--risk <r>]\n\
          \x20                 [--side-effects <s,..>] [--idempotency-key <k>]\n\
          \x20                 [--timeout-secs <n>] [--max-output-bytes <n>]\n\
+         \x20                 Runs <cmd> directly with explicit argv entries from --arg;\n\
+         \x20                 there is no implicit shell, redirect, pipe, glob, or && parsing.\n\
+         \x20                 For an explicit confined shell, use --command /bin/sh --arg -c --arg '<line>'.\n\
          \x20 receipt record  --session <id> --action <id> [--status <s>] [--summary <text>]\n\
          \x20 journal verify  --session <id>\n\
          \x20 trace show      --session <id>\n\

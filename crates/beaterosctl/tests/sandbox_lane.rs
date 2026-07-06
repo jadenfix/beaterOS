@@ -155,6 +155,92 @@ fn execute_runs_for_real_and_records_a_filesystem_diff() {
 }
 
 #[test]
+fn execute_runs_program_and_args_directly_without_implicit_shell() {
+    let home = TempDir::new("home");
+    let work = TempDir::new("work");
+    let h = home.canonical();
+    let workdir = work.canonical();
+    let session = "sess-direct-exec";
+
+    create_session(&h, session);
+    let grant_id = issue_grant(
+        &h,
+        session,
+        &["--actions", "execute", "--path-prefix", &workdir],
+    );
+
+    let out = ok(
+        &h,
+        &[
+            "action",
+            "execute",
+            "--session",
+            session,
+            "--tool",
+            "touch",
+            "--command",
+            "touch",
+            "--arg",
+            "direct.txt",
+            "--cwd",
+            &workdir,
+            "--grants",
+            &grant_id,
+            "--side-effects",
+            "local_write",
+            "--action-id",
+            "act-direct",
+        ],
+    );
+
+    assert!(out.contains("Allowed"), "action must be admitted:\n{out}");
+    assert!(out.contains("execution:   ok"), "must execute:\n{out}");
+    assert!(PathBuf::from(&workdir).join("direct.txt").is_file());
+
+    // Redirect-looking tokens are just argv data. There is no implicit shell
+    // that would interpret `>` as a redirection operator.
+    let literal_arg = PathBuf::from(&workdir).join("literal-redirect");
+    let redirected = PathBuf::from(&workdir).join("redirected.txt");
+    let out = ok(
+        &h,
+        &[
+            "action",
+            "execute",
+            "--session",
+            session,
+            "--tool",
+            "touch",
+            "--command",
+            "touch",
+            "--arg",
+            "literal-redirect",
+            "--arg",
+            ">",
+            "--arg",
+            "redirected.txt",
+            "--cwd",
+            &workdir,
+            "--grants",
+            &grant_id,
+            "--side-effects",
+            "local_write",
+            "--action-id",
+            "act-direct-no-shell",
+        ],
+    );
+    assert!(out.contains("execution:   ok"), "{out}");
+    assert!(literal_arg.is_file());
+    assert!(PathBuf::from(&workdir).join(">").is_file());
+    assert!(
+        redirected.is_file(),
+        "touch receives redirected.txt as an argv entry, not as a shell redirect"
+    );
+
+    let verify = ok(&h, &["journal", "verify", "--session", session]);
+    assert!(verify.contains("journal OK"), "{verify}");
+}
+
+#[test]
 fn symlink_escape_is_rejected_and_nothing_executes() {
     let home = TempDir::new("home");
     let granted = TempDir::new("granted");

@@ -15,18 +15,17 @@
 //!    prefix(es). This is the symlink-escape defense, and the returned canonical
 //!    path is the kernel-derived `resolved_target` (§7.4) that a mediation point
 //!    — never the agent — must author.
-//! 2. **Real OS filesystem confinement.** cwd anchoring is not confinement: the
-//!    agent controls the full `sh -c` command and can name absolute paths, `..`,
-//!    or read arbitrary files regardless of cwd. So the child is wrapped in the
-//!    macOS **Seatbelt** sandbox (`/usr/bin/sandbox-exec`) with a generated
-//!    *deny-default* profile: it may WRITE only within the grant-derived
-//!    canonical prefixes (plus `/dev/null`), may READ system paths (to load a
-//!    shell/binary and the dynamic loader's shared cache) plus those prefixes,
-//!    and is DENIED every other read of user data and every write. If the
-//!    enforcer is unavailable, the lane **fails closed** — it never runs an
-//!    unconfined command. This is the macOS lane; a Linux lane (seccomp-bpf +
-//!    Landlock + mount namespaces) is a future implementor of the same
-//!    [`Confiner`] seam.
+//! 2. **Real OS filesystem confinement.** cwd anchoring is not confinement: a
+//!    child process can name absolute paths, `..`, or arbitrary files regardless
+//!    of cwd. So the child is wrapped in the macOS **Seatbelt** sandbox
+//!    (`/usr/bin/sandbox-exec`) with a generated *deny-default* profile: it may
+//!    WRITE only within the grant-derived canonical prefixes (plus `/dev/null`),
+//!    may READ system paths (to load a binary, or an explicitly requested shell,
+//!    and the dynamic loader's shared cache) plus those prefixes, and is DENIED
+//!    every other read of user data and every write. If the enforcer is
+//!    unavailable, the lane **fails closed** — it never runs an unconfined
+//!    command. This is the macOS lane; a Linux lane (seccomp-bpf + Landlock +
+//!    mount namespaces) is a future implementor of the same [`Confiner`] seam.
 //! 3. **Scrubbed environment.** The child is spawned with
 //!    [`Command::env_clear`](std::process::Command::env_clear); only a minimal
 //!    safe `PATH` is set. No inherited global secrets (§13.8).
