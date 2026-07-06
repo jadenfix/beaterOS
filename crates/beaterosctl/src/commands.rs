@@ -427,8 +427,7 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let resolved_str = resolved.display().to_string();
 
     // (2) Build the manifest. The sandbox has already mediated `--cwd`, so the
-    // manifest target is the canonical path used for authority. The requested cwd
-    // remains visible in the CLI output and command inputs; `resolved_target`
+    // manifest target is the canonical path used for authority. `resolved_target`
     // duplicates the mediator-derived path as corroborating evidence for replay.
     // inputs_digest binds command, args, and the explicit environment allowlist.
     let target = CapabilitySelector {

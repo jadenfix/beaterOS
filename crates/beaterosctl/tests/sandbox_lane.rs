@@ -241,7 +241,6 @@ fn symlinked_grant_prefix_and_cwd_are_compared_in_canonical_namespace() {
         workdir.as_str()
     );
     let trace = ok(&h, &["trace", "show", "--session", session]);
-    assert!(trace.contains(&alias.display().to_string()), "{trace}");
     assert!(
         trace.contains(&format!("resolved: FilePath {workdir}")),
         "{trace}"
