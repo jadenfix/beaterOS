@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, ready_for_review]
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   push:
     branches:
       - main
@@ -11,11 +13,16 @@ jobs:
   pr-review-packet:
     name: PR review packet
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request_target'
+    permissions:
+      contents: read
 
     steps:
-      - name: Checkout
+      - name: Checkout trusted base policy
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
 
       - name: Check optimization packet
         env:
@@ -25,6 +32,7 @@ jobs:
   macos:
     name: macOS Rust workspace
     runs-on: macos-latest
+    if: github.event_name != 'pull_request_target'
 
     steps:
       - name: Checkout

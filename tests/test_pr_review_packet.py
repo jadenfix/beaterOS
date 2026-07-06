@@ -20,6 +20,11 @@ def _body(section: str) -> str:
 
 Runtime work.
 
+## Type of change
+
+- [ ] Performance, language boundary, compiler/runtime, accelerator, or close-to-metal
+- [ ] Docs / process only
+
 ## Optimization packet
 {section}
 
@@ -70,6 +75,14 @@ class PrReviewPacketTests(unittest.TestCase):
 
     def test_explicit_na_bypasses_packet(self) -> None:
         self.assertEqual(MODULE.validate_pr_body(_body("N/A")), [])
+
+    def test_sensitive_change_cannot_use_na(self) -> None:
+        body = _body("N/A").replace(
+            "- [ ] Performance, language boundary, compiler/runtime, accelerator, or close-to-metal",
+            "- [x] Performance, language boundary, compiler/runtime, accelerator, or close-to-metal",
+        )
+        errors = MODULE.validate_pr_body(body)
+        self.assertEqual(errors, ["optimization packet cannot be N/A for performance-sensitive changes"])
 
 
     def test_missing_section_fails(self) -> None:

@@ -9,7 +9,7 @@ import sys
 
 
 SECTION_RE = re.compile(
-    r"^##\s+Optimization packet\s*$"
+    r"^##\s+{heading}\s*$"
     r"(?P<section>.*?)"
     r"(?=^##\s+|\Z)",
     flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
@@ -27,12 +27,24 @@ REQUIRED_ITEMS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("source links/dates", ("source links", "dates")),
 )
 
+SENSITIVE_TYPE_MARKERS = (
+    "performance, language boundary, compiler/runtime, accelerator, or close-to-metal",
+)
 
-def _find_optimization_section(body: str) -> str | None:
-    match = SECTION_RE.search(body)
+
+def _find_section(body: str, heading: str) -> str | None:
+    pattern = re.compile(
+        SECTION_RE.pattern.format(heading=re.escape(heading)),
+        flags=SECTION_RE.flags,
+    )
+    match = pattern.search(body)
     if match is None:
         return None
     return match.group("section")
+
+
+def _find_optimization_section(body: str) -> str | None:
+    return _find_section(body, "Optimization packet")
 
 
 def _is_explicit_na(section: str) -> bool:
@@ -61,11 +73,24 @@ def _checked_bullet_blocks(section: str) -> list[str]:
     return [" ".join(block).lower() for block in blocks]
 
 
+def _has_checked_sensitive_type(body: str) -> bool:
+    section = _find_section(body, "Type of change")
+    if section is None:
+        return False
+    checked_blocks = _checked_bullet_blocks(section)
+    return any(
+        any(marker in block for marker in SENSITIVE_TYPE_MARKERS)
+        for block in checked_blocks
+    )
+
+
 def validate_pr_body(body: str) -> list[str]:
     section = _find_optimization_section(body)
     if section is None:
         return ["missing '## Optimization packet' section"]
     if _is_explicit_na(section):
+        if _has_checked_sensitive_type(body):
+            return ["optimization packet cannot be N/A for performance-sensitive changes"]
         return []
 
     checked_blocks = _checked_bullet_blocks(section)
