@@ -145,7 +145,7 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     let resource_kind: ResourceKind = args::require_enum(args, "resource-kind")?;
     let raw_resource_id = args.require("resource-id")?;
     let resource_id = if resource_kind == ResourceKind::FilePath && raw_resource_id != "*" {
-        canonicalize_file_authority("resource-id", raw_resource_id)?
+        canonicalize_file_authority_or_lexical("resource-id", raw_resource_id)?
     } else {
         raw_resource_id.to_string()
     };
@@ -171,7 +171,7 @@ fn grant_issue(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     for prefix in args.csv("path-prefix") {
         constraints
             .path_prefixes
-            .insert(canonicalize_file_authority("path-prefix", &prefix)?);
+            .insert(canonicalize_existing_file_authority("path-prefix", &prefix)?);
     }
     for host in args.csv("network-allow") {
         constraints.network_allowlist.insert(host);
@@ -668,7 +668,7 @@ fn confinement_prefixes(
 /// relative paths and `..` components. Existing paths are stored in the
 /// canonical realpath namespace used by the sandbox; missing absolute paths are
 /// retained as lexical authority for compatibility with existing proposal flows.
-fn canonicalize_file_authority(field: &str, value: &str) -> CliResult<String> {
+fn canonicalize_file_authority_or_lexical(field: &str, value: &str) -> CliResult<String> {
     let path = Path::new(value);
     if !path.is_absolute()
         || path.components().any(|component| {
@@ -685,6 +685,23 @@ fn canonicalize_file_authority(field: &str, value: &str) -> CliResult<String> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(value.to_string()),
         Err(err) => Err(CliError::Io(err)),
     }
+}
+
+fn canonicalize_existing_file_authority(field: &str, value: &str) -> CliResult<String> {
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::CurDir | Component::ParentDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(CliError::invalid(field, value));
+    }
+    std::fs::canonicalize(path)
+        .map(|canonical| canonical.display().to_string())
+        .map_err(CliError::Io)
 }
 
 fn parse_env_assignment(raw: &str) -> CliResult<(String, String)> {

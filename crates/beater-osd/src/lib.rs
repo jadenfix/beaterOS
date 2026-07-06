@@ -1178,10 +1178,7 @@ fn normalize_grant_file_authority(mut grant: CapabilityGrant) -> DaemonResult<Ca
     }
     let mut normalized_prefixes = BTreeSet::new();
     for prefix in &grant.constraints.path_prefixes {
-        normalized_prefixes.insert(canonical_existing_file_authority_or_lexical(
-            "path-prefix",
-            prefix,
-        )?);
+        normalized_prefixes.insert(canonical_existing_file_authority("path-prefix", prefix)?);
     }
     grant.constraints.path_prefixes = normalized_prefixes;
     Ok(grant)
@@ -1196,6 +1193,17 @@ fn canonical_existing_file_authority_or_lexical(field: &str, value: &str) -> Dae
             "file grant {field} {value:?} cannot be canonicalized: {err}"
         ))),
     }
+}
+
+fn canonical_existing_file_authority(field: &str, value: &str) -> DaemonResult<String> {
+    validate_absolute_lexical_file_authority(field, value)?;
+    fs::canonicalize(Path::new(value))
+        .map(|canonical| canonical.display().to_string())
+        .map_err(|err| {
+            DaemonError::Refused(format!(
+                "file grant {field} {value:?} cannot be canonicalized: {err}"
+            ))
+        })
 }
 
 fn validate_absolute_lexical_file_authority(field: &str, value: &str) -> DaemonResult<()> {

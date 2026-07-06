@@ -25,6 +25,12 @@ impl TempHome {
     fn as_str(&self) -> String {
         self.path.display().to_string()
     }
+
+    fn child_dir(&self, name: &str) -> String {
+        let path = self.path.join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        path.display().to_string()
+    }
 }
 
 impl Drop for TempHome {
@@ -56,6 +62,12 @@ fn ok(home: &str, args: &[&str]) -> String {
 fn full_coding_workflow_end_to_end() {
     let home = TempHome::new();
     let h = home.as_str();
+    let repo = home.child_dir("repo");
+    let main_rs = PathBuf::from(&repo)
+        .join("src")
+        .join("main.rs")
+        .display()
+        .to_string();
     let session = "sess-mvp";
 
     // 1. Create a session from a goal.
@@ -90,7 +102,7 @@ fn full_coding_workflow_end_to_end() {
             "--actions",
             "read,write",
             "--path-prefix",
-            "/workspace/repo",
+            &repo,
             "--reason",
             "coding task",
         ],
@@ -117,10 +129,10 @@ fn full_coding_workflow_end_to_end() {
             "--target-kind",
             "file_path",
             "--target",
-            "/workspace/repo/src/main.rs",
+            &main_rs,
             // Kernel-derived resolved target supplied by the mediation point.
             "--resolved-target",
-            "/workspace/repo/src/main.rs",
+            &main_rs,
             "--grants",
             &grant_id,
             "--action-id",
@@ -234,6 +246,8 @@ fn full_coding_workflow_end_to_end() {
 fn receipt_is_refused_without_admitted_action() {
     let home = TempHome::new();
     let h = home.as_str();
+    let repo = home.child_dir("repo");
+    let repo_x = PathBuf::from(&repo).join("x").display().to_string();
     let session = "sess-refuse";
 
     ok(
@@ -265,7 +279,7 @@ fn receipt_is_refused_without_admitted_action() {
             "--actions",
             "read",
             "--path-prefix",
-            "/repo",
+            &repo,
         ],
     );
     let grant_id = grant_out
@@ -290,7 +304,7 @@ fn receipt_is_refused_without_admitted_action() {
             "--target-kind",
             "file_path",
             "--target",
-            "/repo/x",
+            &repo_x,
             "--grants",
             &grant_id,
             "--action-id",
@@ -478,6 +492,8 @@ fn unknown_session_fails_closed() {
 fn session_lifecycle_gates_new_authority_and_admission() {
     let home = TempHome::new();
     let h = home.as_str();
+    let repo = home.child_dir("repo");
+    let repo_x = PathBuf::from(&repo).join("x").display().to_string();
     let session = "sess-life";
 
     ok(
@@ -535,7 +551,7 @@ fn session_lifecycle_gates_new_authority_and_admission() {
             "--actions",
             "write",
             "--path-prefix",
-            "/repo",
+            &repo,
         ],
     );
     let grant_id = grant
@@ -560,9 +576,9 @@ fn session_lifecycle_gates_new_authority_and_admission() {
             "--target-kind",
             "file_path",
             "--target",
-            "/repo/x",
+            &repo_x,
             "--resolved-target",
-            "/repo/x",
+            &repo_x,
             "--grants",
             grant_id,
             "--action-id",
@@ -589,6 +605,8 @@ fn help_is_available() {
 fn setup_admitted_write(session: &str) -> TempHome {
     let home = TempHome::new();
     let h = home.as_str();
+    let repo = home.child_dir("repo");
+    let repo_a = PathBuf::from(&repo).join("a").display().to_string();
     ok(
         &h,
         &[
@@ -618,7 +636,7 @@ fn setup_admitted_write(session: &str) -> TempHome {
             "--actions",
             "read,write",
             "--path-prefix",
-            "/repo",
+            &repo,
         ],
     );
     let grant_id = grant_out
@@ -641,13 +659,13 @@ fn setup_admitted_write(session: &str) -> TempHome {
             "--target-kind",
             "file_path",
             "--target",
-            "/repo/a",
+            &repo_a,
             // `resolved_target` is kernel-derived (final.md §7.4): a mediation
             // point supplies the canonical, symlink-resolved path. The CLI no
             // longer infers it from the agent's claimed target, so a path-prefix
             // grant only admits when a resolved target is provided here.
             "--resolved-target",
-            "/repo/a",
+            &repo_a,
             "--grants",
             &grant_id,
             "--action-id",
@@ -881,6 +899,8 @@ fn path_traversal_session_id_is_rejected() {
 fn path_prefix_grant_without_resolved_target_fails_closed() {
     let home = TempHome::new();
     let h = home.as_str();
+    let ws = home.child_dir("ws");
+    let ws_file = PathBuf::from(&ws).join("x.txt").display().to_string();
     let session = "sess-noresolve";
     ok(
         &h,
@@ -911,7 +931,7 @@ fn path_prefix_grant_without_resolved_target_fails_closed() {
             "--actions",
             "read,write",
             "--path-prefix",
-            "/ws",
+            &ws,
         ],
     );
     let grant_id = grant_out
@@ -935,7 +955,7 @@ fn path_prefix_grant_without_resolved_target_fails_closed() {
             "--target-kind",
             "file_path",
             "--target",
-            "/ws/x.txt",
+            &ws_file,
             "--grants",
             &grant_id,
             "--action-id",
@@ -947,5 +967,50 @@ fn path_prefix_grant_without_resolved_target_fails_closed() {
     assert!(
         out.contains("NeedsNarrowedGrant"),
         "path-prefix grant must fail closed without a resolved target:\n{out}"
+    );
+}
+
+#[test]
+fn path_prefix_grant_requires_existing_canonical_prefix() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let missing = home.path.join("missing-prefix").display().to_string();
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            "sess-missing-prefix",
+            "--agent",
+            "a",
+            "--workspace",
+            "w",
+            "--goal",
+            "g",
+        ],
+    );
+
+    let err = cli(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            "sess-missing-prefix",
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "*",
+            "--actions",
+            "read",
+            "--path-prefix",
+            &missing,
+        ],
+    )
+    .expect_err("missing path-prefix authority must fail closed");
+    assert!(
+        matches!(err, CliError::Runtime(_) | CliError::Io(_)),
+        "unexpected error: {err}"
     );
 }
