@@ -198,11 +198,30 @@ macOS local lane. Linux `seccomp`/Landlock/cgroups and container/VM lanes
 - **Tamper-evident.** `journal verify` recomputes every hash and rejects any
   reordered or edited record.
 
+## Local daemon API
+
+`beater-osd serve` is the first long-running local control-plane surface over
+the same daemon-owned store. It is intentionally small: `/healthz` is the only
+unauthenticated route, while `/v1/sessions` and `/v1/sessions/<id>` require a
+bearer token loaded from `--token-file`.
+
+```console
+$ printf '%s\n' 'replace-with-operator-token' > .beateros/token
+$ beater-osd serve --root .beateros --token-file .beateros/token \
+    --bind 127.0.0.1:8787
+```
+
+The listener refuses non-loopback bind addresses, caps request headers/bodies,
+uses short socket timeouts, and applies loopback `Host`/`Origin` checks before
+serving token-gated routes. Loopback and browser boundary checks are not treated
+as authentication; the token remains the authority gate for control-plane data.
+
 ## Scope boundary
 
 `action execute` now routes through the gateway and a daemon-owned durable local
 tool registry file. Richer registry operations (signed remote publishers,
 operator review queues, network/container/VM/browser tool lanes) remain future
-targets. The current CLI opens the `beater-osd` store in-process; the next
-runtime step is exposing the same store through a long-running local daemon API
-without changing the authority contract.
+targets. The current CLI still opens the `beater-osd` store in-process for write
+operations; the daemon API starts with read-only session projection so the
+control-plane boundary can harden before action execution moves behind the
+long-running process.
