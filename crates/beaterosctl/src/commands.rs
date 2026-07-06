@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
 use beater_os_core::{
-    ActionKind, ActionManifest, AgentSession, Budget, CapabilityGrant, CapabilityReceiptInput,
-    CapabilityScope, CapabilitySelector, DataClass, DecisionResult, GrantConstraints, ResourceKind,
-    RiskClass, SessionStatus, SideEffectClass, ToolManifest, hash_json,
+    ActionKind, ActionManifest, AgentSession, Budget, CapabilityReceiptInput, CapabilityScope,
+    CapabilitySelector, DataClass, DecisionResult, GrantConstraints, ResourceKind, RiskClass,
+    SessionStatus, SideEffectClass, ToolManifest, hash_json,
 };
 use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environment};
 use beater_os_tool_gateway::{
@@ -485,7 +485,7 @@ fn action_execute(store: &Store, args: &ParsedArgs) -> CliResult<String> {
         &expected_tool_digest,
         &projection.session.workspace_id,
         &expected_side_effects,
-        risk_class.clone(),
+        risk_class,
     )?;
 
     let outcome = execute_local_tool(
@@ -577,9 +577,10 @@ fn local_shell_registry(
     side_effects: &BTreeSet<SideEffectClass>,
     risk_class: RiskClass,
 ) -> CliResult<ToolRegistry> {
-    let mut policy = RegistryPolicy::default();
-    policy.require_signature = false;
-    let mut registry = ToolRegistry::new(policy);
+    let mut registry = ToolRegistry::new(RegistryPolicy {
+        require_signature: false,
+        ..Default::default()
+    });
     registry.register(RegisteredTool {
         manifest: ToolManifest {
             tool_id: tool_id.to_string(),
@@ -601,32 +602,6 @@ fn local_shell_registry(
     registry.pin(tool_id, version)?;
     registry.set_workspace_allowlist(workspace_id, [tool_id.to_string()]);
     Ok(registry)
-}
-
-/// Derive the sandbox confinement prefixes from the *named grants' authority*.
-///
-/// For each active grant the action names, we take its explicit `path_prefixes`
-/// and, if the grant is scoped to a concrete file-path resource (not the `*`
-/// wildcard), that resource id too. This binds the sandbox boundary to granted
-/// capability, so the agent can never widen its own confinement via a flag.
-fn confinement_prefixes(
-    active_grants: &[CapabilityGrant],
-    required_grants: &BTreeSet<String>,
-) -> Vec<String> {
-    let mut prefixes = BTreeSet::new();
-    for grant in active_grants
-        .iter()
-        .filter(|grant| required_grants.contains(&grant.grant_id))
-    {
-        for prefix in &grant.constraints.path_prefixes {
-            prefixes.insert(prefix.clone());
-        }
-        let selector = &grant.scope.selector;
-        if selector.resource_kind == ResourceKind::FilePath && selector.resource_id != "*" {
-            prefixes.insert(selector.resource_id.clone());
-        }
-    }
-    prefixes.into_iter().collect()
 }
 
 /// Canonicalize file-path authority before it is written into a grant.
