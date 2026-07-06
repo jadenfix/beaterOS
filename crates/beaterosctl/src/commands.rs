@@ -248,12 +248,12 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
     };
     // `resolved_target` is a KERNEL-DERIVED field (final.md §7.4): the canonical,
     // symlink-resolved target must be computed by a mediation point (the sandbox
-    // / gateway lane), never inferred from the agent's own claimed path. The CLI
-    // is the agent surface, so it leaves `resolved_target` unset unless a real
-    // mediation point supplies one via `--resolved-target`. Consequently a
-    // path-prefix grant fails closed here (core's `path_constraints_allow`
-    // requires a resolved target) until the sandbox lane (slice 5) sets it —
-    // rather than admitting against the agent's unverified, un-canonicalized path.
+    // / gateway lane), never inferred from the agent's own claimed path. Raw
+    // non-execute proposals may include it as evidence, but core still requires
+    // the requested path to remain inside path-prefix grants so it cannot launder
+    // authority through a caller-claimed resolved path. Mediated Execute actions
+    // use `resolved_target` as authority because the sandbox lane derives it
+    // before admission.
     let resolved_target = args.get("resolved-target").map(|value| CapabilitySelector {
         resource_kind: target.resource_kind.clone(),
         resource_id: value.to_string(),
@@ -635,10 +635,8 @@ fn confinement_prefixes(
 /// The sandbox resolves working directories and prefixes with `realpath`.
 /// Storing grant authority in the same namespace avoids false denials on macOS
 /// aliases such as `/var` -> `/private/var`, while still failing closed for
-/// relative paths or `..` components. Missing leaf paths are handled by
-/// canonicalizing the longest existing ancestor and appending the remaining
-/// components lexically, so grants can still name future files/directories
-/// without widening to the ancestor.
+/// relative paths, `..` components, and missing paths whose future symlink shape
+/// could retarget the grant.
 fn canonicalize_file_authority(field: &str, value: &str) -> CliResult<String> {
     let path = Path::new(value);
     if !path.is_absolute()
@@ -651,30 +649,9 @@ fn canonicalize_file_authority(field: &str, value: &str) -> CliResult<String> {
     {
         return Err(CliError::invalid(field, value));
     }
-
-    let mut cursor = path;
-    let mut missing = Vec::new();
-    loop {
-        match std::fs::canonicalize(cursor) {
-            Ok(mut canonical) => {
-                for component in missing.iter().rev() {
-                    canonical.push(component);
-                }
-                return Ok(canonical.display().to_string());
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                let Some(name) = cursor.file_name() else {
-                    return Err(CliError::Io(err));
-                };
-                missing.push(name.to_os_string());
-                let Some(parent) = cursor.parent() else {
-                    return Err(CliError::Io(err));
-                };
-                cursor = parent;
-            }
-            Err(err) => return Err(CliError::Io(err)),
-        }
-    }
+    std::fs::canonicalize(path)
+        .map(|canonical| canonical.display().to_string())
+        .map_err(CliError::Io)
 }
 
 fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {

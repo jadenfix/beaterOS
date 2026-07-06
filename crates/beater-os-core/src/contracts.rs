@@ -390,10 +390,7 @@ impl CapabilityGrant {
         if self.denied_actions.contains(&manifest.action_kind) {
             return false;
         }
-        if !self
-            .scope
-            .allows(authority_selector(manifest), &manifest.action_kind)
-        {
+        if !self.scope.allows(scope_selector(manifest), &manifest.action_kind) {
             return false;
         }
         if let Some(max_risk) = self.constraints.max_risk
@@ -425,7 +422,7 @@ impl CapabilityGrant {
     }
 
     fn path_constraints_allow(&self, manifest: &ActionManifest) -> bool {
-        if authority_selector(manifest).resource_kind != ResourceKind::FilePath
+        if manifest.target.resource_kind != ResourceKind::FilePath
             || self.constraints.path_prefixes.is_empty()
         {
             return true;
@@ -436,12 +433,19 @@ impl CapabilityGrant {
         if resolved_target.resource_kind != ResourceKind::FilePath {
             return false;
         }
+        let Some(requested_path) = normalized_absolute_path(&manifest.target.resource_id) else {
+            return false;
+        };
         let Some(resolved_path) = normalized_absolute_path(&resolved_target.resource_id) else {
             return false;
         };
         self.constraints.path_prefixes.iter().any(|prefix| {
             normalized_absolute_path(prefix)
-                .map(|normalized_prefix| path_is_inside_prefix(&resolved_path, &normalized_prefix))
+                .map(|normalized_prefix| {
+                    path_is_inside_prefix(&resolved_path, &normalized_prefix)
+                        && (uses_resolved_file_authority(manifest)
+                            || path_is_inside_prefix(&requested_path, &normalized_prefix))
+                })
                 .unwrap_or(false)
         })
     }
@@ -460,14 +464,25 @@ impl CapabilityGrant {
     }
 }
 
-fn authority_selector(manifest: &ActionManifest) -> &CapabilitySelector {
+fn scope_selector(manifest: &ActionManifest) -> &CapabilitySelector {
+    if uses_resolved_file_authority(manifest) {
+        return manifest
+            .resolved_target
+            .as_ref()
+            .expect("uses_resolved_file_authority requires a resolved target");
+    }
+    &manifest.target
+}
+
+fn uses_resolved_file_authority(manifest: &ActionManifest) -> bool {
     if manifest.target.resource_kind == ResourceKind::FilePath
+        && manifest.action_kind == ActionKind::Execute
         && let Some(resolved_target) = &manifest.resolved_target
         && resolved_target.resource_kind == ResourceKind::FilePath
     {
-        return resolved_target;
+        return true;
     }
-    &manifest.target
+    false
 }
 
 fn path_is_inside_prefix(path: &str, prefix: &str) -> bool {

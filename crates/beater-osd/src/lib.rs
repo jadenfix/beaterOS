@@ -25,7 +25,8 @@ use beater_os_core::{
     ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, CapabilityGrant,
     CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult, DelegationMode,
     InMemoryJournal, JournalEvent, JournalRecord, PaymentMandate, PolicyDecision, PolicyEngine,
-    ReceiptLedger, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, ToolManifest,
+    ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence,
+    ToolManifest,
 };
 use chrono::{DateTime, Utc};
 
@@ -355,6 +356,7 @@ impl Store {
         created_at: DateTime<Utc>,
     ) -> DaemonResult<JournalRecord> {
         self.with_session_lock(session_id, || {
+            let grant = normalize_grant_file_authority(grant)?;
             let mut journal = self.load_journal_unlocked(session_id)?;
             let admission_state = admission_state_from_journal(session_id, &journal)?;
             ensure_session_running(&admission_state.session)?;
@@ -1163,6 +1165,46 @@ fn validate_grant_authority(state: &AdmissionState, grant: &CapabilityGrant) -> 
         }
     }
     Ok(())
+}
+
+fn normalize_grant_file_authority(mut grant: CapabilityGrant) -> DaemonResult<CapabilityGrant> {
+    if grant.scope.selector.resource_kind == ResourceKind::FilePath
+        && grant.scope.selector.resource_id != "*"
+    {
+        grant.scope.selector.resource_id =
+            canonical_file_authority("resource-id", &grant.scope.selector.resource_id)?;
+    }
+    let mut normalized_prefixes = BTreeSet::new();
+    for prefix in &grant.constraints.path_prefixes {
+        normalized_prefixes.insert(canonical_file_authority("path-prefix", prefix)?);
+    }
+    grant.constraints.path_prefixes = normalized_prefixes;
+    Ok(grant)
+}
+
+fn canonical_file_authority(field: &str, value: &str) -> DaemonResult<String> {
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir
+                    | std::path::Component::ParentDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Err(DaemonError::Refused(format!(
+            "file grant {field} {value:?} must be an absolute canonical path"
+        )));
+    }
+    fs::canonicalize(path)
+        .map(|canonical| canonical.display().to_string())
+        .map_err(|err| {
+            DaemonError::Refused(format!(
+                "file grant {field} {value:?} cannot be canonicalized: {err}"
+            ))
+        })
 }
 
 fn grant_is_attenuated(parent: &CapabilityGrant, grant: &CapabilityGrant) -> bool {
