@@ -23,8 +23,8 @@ use beater_os_core::{
     SideEffectClass, TaintLabel,
 };
 use beater_os_sandbox::{
-    execute as sandbox_execute, resolve_confined, SandboxLimits, SandboxOutcome, SandboxRequest,
-    SandboxStatus,
+    SandboxLimits, SandboxOutcome, SandboxRequest, SandboxStatus, execute as sandbox_execute,
+    resolve_confined,
 };
 use beater_os_tool_registry::{ResolveRequest, ToolRegistry};
 use beater_osd::{DaemonError, Store};

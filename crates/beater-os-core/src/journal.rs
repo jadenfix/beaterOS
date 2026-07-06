@@ -8,7 +8,7 @@ use crate::contracts::{
     PaymentMandate, PolicyDecision, ScenarioManifest, SimulationEvidence,
 };
 use crate::error::{BeaterOsError, BeaterOsResult};
-use crate::hash::{hash_json, HashValue, GENESIS_HASH};
+use crate::hash::{GENESIS_HASH, HashValue, hash_json};
 use crate::receipt::{CapabilityReceipt, ReceiptLedger};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

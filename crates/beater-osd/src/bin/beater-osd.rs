@@ -23,7 +23,7 @@ use beater_os_core::{
     CapabilityScope, CapabilitySelector, DataClass, DecisionResult, DelegationMode,
     GrantConstraints, PolicyDecision, ResourceKind, RiskClass, SessionStatus, SideEffectClass,
 };
-use beater_osd::{DaemonError, Store, DAEMON_POLICY_VERSION};
+use beater_osd::{DAEMON_POLICY_VERSION, DaemonError, Store};
 use chrono::{Duration, TimeDelta, Utc};
 use serde::Serialize;
 

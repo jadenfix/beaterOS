@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Barrier};
+use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -531,10 +531,12 @@ fn missing_grant_denies_without_execution_authority() {
         .unwrap();
 
     assert_eq!(outcome.decision.result, DecisionResult::Denied);
-    assert!(outcome
-        .decision
-        .explanation
-        .contains("required grants are missing"));
+    assert!(
+        outcome
+            .decision
+            .explanation
+            .contains("required grants are missing")
+    );
     store
         .load_journal(session_id)
         .unwrap()
@@ -561,10 +563,12 @@ fn issued_payment_mandate_is_projected_into_admission() {
         .admit_action(session_id, payment_manifest(session_id, "act-pay"))
         .unwrap();
     assert_ne!(outcome.decision.result, DecisionResult::Denied);
-    assert!(outcome
-        .decision
-        .matched_rules
-        .contains(&"payment_authorized_by_mandate".to_string()));
+    assert!(
+        outcome
+            .decision
+            .matched_rules
+            .contains(&"payment_authorized_by_mandate".to_string())
+    );
 }
 
 #[test]
@@ -655,10 +659,12 @@ fn expired_grant_denies_without_execution_authority() {
         .unwrap();
 
     assert_eq!(outcome.decision.result, DecisionResult::Denied);
-    assert!(outcome
-        .decision
-        .explanation
-        .contains("delegation ancestors is revoked, expired, or missing"));
+    assert!(
+        outcome
+            .decision
+            .explanation
+            .contains("delegation ancestors is revoked, expired, or missing")
+    );
 }
 
 #[test]
@@ -674,10 +680,12 @@ fn revoked_grant_denies_without_execution_authority() {
         .unwrap();
 
     assert_eq!(outcome.decision.result, DecisionResult::Denied);
-    assert!(outcome
-        .decision
-        .explanation
-        .contains("delegation ancestors is revoked, expired, or missing"));
+    assert!(
+        outcome
+            .decision
+            .explanation
+            .contains("delegation ancestors is revoked, expired, or missing")
+    );
 }
 
 #[test]
