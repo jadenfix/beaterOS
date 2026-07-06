@@ -22,9 +22,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use beater_os_core::{
-    ActionKind, ActionManifest, AdmissionContext, AgentSession, CapabilityGrant, CapabilityReceipt,
-    CapabilityReceiptInput, CapabilityScope, DelegationMode, InMemoryJournal, JournalEvent,
-    JournalRecord, PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger, SideEffectClass,
+    ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, CapabilityGrant,
+    CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult, DelegationMode,
+    InMemoryJournal, JournalEvent, JournalRecord, PaymentMandate, PolicyDecision, PolicyEngine,
+    ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence,
+    ToolManifest,
+};
+use beater_os_tool_registry::{
+    RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
 };
 use chrono::{DateTime, Utc};
 
@@ -33,8 +38,11 @@ pub use crate::error::{DaemonError, DaemonResult};
 const SESSIONS_DIR: &str = "sessions";
 const JOURNAL_FILE: &str = "journal.jsonl";
 const RECEIPTS_FILE: &str = "receipts.jsonl";
+const TOOL_REGISTRY_FILE: &str = "tool-registry.json";
+const TOOL_REGISTRY_LOCK: &str = "tool-registry.lock";
 const LOCK_SUFFIX: &str = ".lock";
-const DAEMON_POLICY_VERSION: &str = "beateros-policy-v0";
+/// Policy contract version enforced by daemon-owned authority writes.
+pub const DAEMON_POLICY_VERSION: &str = "beateros-policy-v0";
 
 /// Runtime-store configuration.
 #[derive(Debug, Clone)]
@@ -43,6 +51,10 @@ pub struct StoreOptions {
     pub lock_timeout: Duration,
     /// Sleep interval between bounded lock-acquire attempts.
     pub lock_poll_interval: Duration,
+    /// Kernel-owned local tool registry used to ground daemon policy admission.
+    pub tool_registry: BTreeMap<String, ToolManifest>,
+    /// Deny actions whose tool is absent from [`Self::tool_registry`].
+    pub require_registered_tools: bool,
 }
 
 impl Default for StoreOptions {
@@ -50,8 +62,80 @@ impl Default for StoreOptions {
         Self {
             lock_timeout: Duration::from_secs(2),
             lock_poll_interval: Duration::from_millis(2),
+            tool_registry: default_tool_registry(),
+            require_registered_tools: true,
         }
     }
+}
+
+fn default_tool_registry() -> BTreeMap<String, ToolManifest> {
+    BTreeMap::from([
+        tool_manifest(
+            "fs.write",
+            RiskClass::Low,
+            [SideEffectClass::LocalWrite],
+            false,
+        ),
+        tool_manifest("t", RiskClass::Low, [SideEffectClass::LocalWrite], false),
+        tool_manifest("shell", RiskClass::Low, [], true),
+        tool_manifest(
+            "deployer",
+            RiskClass::High,
+            [SideEffectClass::Deployment],
+            false,
+        ),
+        tool_manifest(
+            "tool:test",
+            RiskClass::Low,
+            [SideEffectClass::LocalWrite],
+            false,
+        ),
+        tool_manifest(
+            "tool:deploy",
+            RiskClass::High,
+            [SideEffectClass::Deployment],
+            false,
+        ),
+        tool_manifest(
+            "tool:beater-osd-runtime",
+            RiskClass::Low,
+            [SideEffectClass::LocalWrite],
+            false,
+        ),
+        tool_manifest(
+            "tool:beater-os-runtime",
+            RiskClass::Low,
+            [SideEffectClass::None],
+            false,
+        ),
+        tool_manifest(
+            "tool:payment",
+            RiskClass::High,
+            [SideEffectClass::Payment],
+            false,
+        ),
+    ])
+}
+
+fn tool_manifest(
+    tool_id: &str,
+    risk_class: RiskClass,
+    side_effects: impl IntoIterator<Item = SideEffectClass>,
+    sandbox_required: bool,
+) -> (String, ToolManifest) {
+    (
+        tool_id.to_string(),
+        ToolManifest {
+            tool_id: tool_id.to_string(),
+            publisher: "beater.local".to_string(),
+            version: "1.0.0".to_string(),
+            transport: "local".to_string(),
+            required_capabilities: Vec::new(),
+            side_effects: side_effects.into_iter().collect(),
+            risk_class,
+            sandbox_required,
+        },
+    )
 }
 
 /// Durable daemon-owned store for sessions, journals, and receipt ledgers.
@@ -66,9 +150,57 @@ pub struct Store {
 pub struct SessionProjection {
     pub session: AgentSession,
     pub grants: Vec<CapabilityGrant>,
+    pub revoked_handles: BTreeSet<String>,
     pub mandates: Vec<PaymentMandate>,
     pub manifests: Vec<ActionManifest>,
+    pub decisions: Vec<PolicyDecision>,
+    pub approvals: Vec<ApprovalEvidence>,
+    pub simulations: Vec<SimulationEvidence>,
     pub receipts: Vec<CapabilityReceipt>,
+}
+
+/// Exact local-shell tool version to persist in the daemon-owned tool registry.
+#[derive(Clone, Debug)]
+pub struct LocalShellToolRegistration {
+    pub workspace_id: String,
+    pub tool_id: String,
+    pub version: String,
+    pub content_digest: String,
+    pub side_effects: BTreeSet<SideEffectClass>,
+    pub risk_class: RiskClass,
+}
+
+impl SessionProjection {
+    /// Grants that are active at `now`, projected from daemon-owned journal state.
+    pub fn active_grants(&self, now: DateTime<Utc>) -> Vec<CapabilityGrant> {
+        let grants_by_id: BTreeMap<&str, &CapabilityGrant> = self
+            .grants
+            .iter()
+            .map(|grant| (grant.grant_id.as_str(), grant))
+            .collect();
+        self.grants
+            .iter()
+            .filter(|grant| {
+                grant_effectively_active(grant, now, &self.revoked_handles, &grants_by_id)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Proposed manifest for `action_id`, if the daemon has journaled it.
+    pub fn manifest(&self, action_id: &str) -> Option<&ActionManifest> {
+        self.manifests
+            .iter()
+            .find(|manifest| manifest.action_id == action_id)
+    }
+
+    /// Latest policy decision for `action_id`, if one exists.
+    pub fn latest_decision(&self, action_id: &str) -> Option<&PolicyDecision> {
+        self.decisions
+            .iter()
+            .rev()
+            .find(|decision| decision.action_id == action_id)
+    }
 }
 
 /// Result of a daemon-owned policy admission transaction.
@@ -77,6 +209,14 @@ pub struct AdmissionOutcome {
     pub proposal_record: JournalRecord,
     pub decision_record: JournalRecord,
     pub decision: PolicyDecision,
+}
+
+/// Durable lifecycle transition applied by the daemon store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionTransition {
+    Pause,
+    Resume,
+    Cancel,
 }
 
 impl Store {
@@ -99,6 +239,92 @@ impl Store {
         &self.root
     }
 
+    /// Load the daemon-owned durable tool registry.
+    pub fn load_tool_registry(&self) -> DaemonResult<ToolRegistry> {
+        self.with_registry_lock(|| self.load_tool_registry_unlocked())
+    }
+
+    /// Register or confirm an exact local-shell tool version in the durable
+    /// registry, then allow it for one workspace.
+    ///
+    /// This is intentionally a store operation, not CLI-local state: the
+    /// gateway receives a registry loaded from durable daemon-owned storage, and
+    /// a conflicting version+digest fails closed rather than being silently
+    /// replaced by the caller.
+    pub fn register_local_shell_tool(
+        &self,
+        registration: LocalShellToolRegistration,
+    ) -> DaemonResult<ToolRegistry> {
+        self.with_registry_lock(|| {
+            let mut registry = self.load_tool_registry_unlocked()?;
+            match registry.get(&registration.tool_id, &registration.version) {
+                Ok(existing) if existing.content_digest != registration.content_digest => {
+                    return Err(DaemonError::Refused(format!(
+                        "registered tool {}@{} has digest {}, not requested {}",
+                        registration.tool_id,
+                        registration.version,
+                        existing.content_digest,
+                        registration.content_digest
+                    )));
+                }
+                Ok(_) => {}
+                Err(beater_os_tool_registry::RegistryError::Unregistered { .. }) => {
+                    registry.register(RegisteredTool {
+                        manifest: ToolManifest {
+                            tool_id: registration.tool_id.clone(),
+                            publisher: "beaterosd.local".to_string(),
+                            version: registration.version.clone(),
+                            transport: "local_shell".to_string(),
+                            required_capabilities: Vec::new(),
+                            side_effects: registration.side_effects.clone(),
+                            risk_class: registration.risk_class,
+                            sandbox_required: true,
+                        },
+                        content_digest: registration.content_digest.clone(),
+                        signature: None,
+                        test_status: TestStatus::Passing,
+                        trust: ToolTrust::Trusted,
+                        registered_at: Utc::now(),
+                        notes: "daemon-owned local shell registration".to_string(),
+                    })?;
+                }
+                Err(err) => return Err(err.into()),
+            }
+            registry.pin(&registration.tool_id, &registration.version)?;
+            registry.allow_workspace_tool(&registration.workspace_id, registration.tool_id);
+            self.write_tool_registry_unlocked(&registry)?;
+            Ok(registry)
+        })
+    }
+
+    /// Whether a session exists and its journal genesis verifies.
+    pub fn session_exists(&self, session_id: &str) -> DaemonResult<bool> {
+        self.with_session_lock(session_id, || self.session_exists_unlocked(session_id))
+    }
+
+    /// List session ids with valid journal files, sorted for deterministic CLI output.
+    pub fn list_sessions(&self) -> DaemonResult<Vec<String>> {
+        let dir = self.root.join(SESSIONS_DIR);
+        let mut out = Vec::new();
+        if !dir.is_dir() {
+            return Ok(out);
+        }
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if name.ends_with(LOCK_SUFFIX) || validate_session_id(&name).is_err() {
+                continue;
+            }
+            if let Ok(true) = self.session_exists(&name) {
+                out.push(name);
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
     /// Create a session and write its genesis journal record under the
     /// single-writer lock.
     pub fn create_session(&self, session: &AgentSession) -> DaemonResult<JournalRecord> {
@@ -106,6 +332,8 @@ impl Store {
             if self.session_exists_unlocked(&session.session_id)? {
                 return Err(DaemonError::SessionExists(session.session_id.clone()));
             }
+            let mut session = session.clone();
+            session.status = SessionStatus::Running;
             fs::create_dir_all(self.session_dir(&session.session_id)?)?;
             File::create(self.journal_path(&session.session_id)?)?;
             File::create(self.receipts_path(&session.session_id)?)?;
@@ -118,6 +346,39 @@ impl Store {
             )?;
             journal.verify_chain()?;
             self.write_journal_record_unlocked(&session.session_id, &record)?;
+            Ok(record)
+        })
+    }
+
+    /// Apply a daemon-owned session lifecycle transition under the per-session
+    /// writer lock. Status changes are explicit journal events, not rewritten
+    /// session snapshots, so the genesis authority object remains immutable.
+    pub fn transition_session(
+        &self,
+        session_id: &str,
+        transition: SessionTransition,
+        created_at: DateTime<Utc>,
+    ) -> DaemonResult<JournalRecord> {
+        self.with_session_lock(session_id, || {
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let projection = self.project_unlocked(session_id)?;
+            let from = projection.session.status.clone();
+            let to = next_session_status(transition, &from)?;
+            let transition_id = format!(
+                "session:{session_id}:transition:{}",
+                journal.records().len()
+            );
+            let record = journal.append(
+                JournalEvent::SessionStatusChanged {
+                    transition_id,
+                    session_id: session_id.to_string(),
+                    from,
+                    to,
+                },
+                created_at,
+            )?;
+            journal.verify_chain()?;
+            self.write_journal_record_unlocked(session_id, &record)?;
             Ok(record)
         })
     }
@@ -135,9 +396,24 @@ impl Store {
         created_at: DateTime<Utc>,
     ) -> DaemonResult<JournalRecord> {
         match event {
+            JournalEvent::SessionCreated { .. } => {
+                return Err(DaemonError::Refused(
+                    "SessionCreated must be written through create_session".to_string(),
+                ));
+            }
+            JournalEvent::SessionStatusChanged { .. } => {
+                return Err(DaemonError::Refused(
+                    "SessionStatusChanged must be written through transition_session".to_string(),
+                ));
+            }
             JournalEvent::CapabilityGranted { .. } => {
                 return Err(DaemonError::Refused(
                     "CapabilityGranted must be written through issue_grant".to_string(),
+                ));
+            }
+            JournalEvent::CapabilityRevoked { .. } => {
+                return Err(DaemonError::Refused(
+                    "CapabilityRevoked must be written through revoke_grant".to_string(),
                 ));
             }
             JournalEvent::PaymentMandateIssued { .. } => {
@@ -161,10 +437,59 @@ impl Store {
                     "PolicyDecided must be written through admit_action".to_string(),
                 ));
             }
+            JournalEvent::ApprovalRecorded { .. } => {
+                return Err(DaemonError::Refused(
+                    "ApprovalRecorded must be written through record_approval".to_string(),
+                ));
+            }
+            JournalEvent::SimulationRecorded { .. } => {
+                return Err(DaemonError::Refused(
+                    "SimulationRecorded must be written through record_simulation".to_string(),
+                ));
+            }
             _ => {}
         }
         self.with_session_lock(session_id, || {
             self.append_event_unlocked(session_id, event, created_at)
+        })
+    }
+
+    /// Record action-bound human approval evidence through the daemon boundary.
+    pub fn record_approval(
+        &self,
+        session_id: &str,
+        approval: ApprovalEvidence,
+        created_at: DateTime<Utc>,
+    ) -> DaemonResult<JournalRecord> {
+        self.with_session_lock(session_id, || {
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            ensure_session_running(&admission_state.session)?;
+            validate_approval_evidence(&admission_state, &approval)?;
+            let record = journal.append(JournalEvent::ApprovalRecorded { approval }, created_at)?;
+            journal.verify_chain()?;
+            self.write_journal_record_unlocked(session_id, &record)?;
+            Ok(record)
+        })
+    }
+
+    /// Record action-bound passed simulation evidence through the daemon boundary.
+    pub fn record_simulation(
+        &self,
+        session_id: &str,
+        simulation: SimulationEvidence,
+        created_at: DateTime<Utc>,
+    ) -> DaemonResult<JournalRecord> {
+        self.with_session_lock(session_id, || {
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            ensure_session_running(&admission_state.session)?;
+            validate_simulation_evidence(&admission_state, &simulation)?;
+            let record =
+                journal.append(JournalEvent::SimulationRecorded { simulation }, created_at)?;
+            journal.verify_chain()?;
+            self.write_journal_record_unlocked(session_id, &record)?;
+            Ok(record)
         })
     }
 
@@ -190,6 +515,7 @@ impl Store {
             }
             let mut journal = self.load_journal_unlocked(session_id)?;
             let admission_state = admission_state_from_journal(session_id, &journal)?;
+            ensure_session_running(&admission_state.session)?;
             if grant.holder != admission_state.session.agent_id {
                 return Err(DaemonError::Refused(format!(
                     "grant {} holder {} does not match session agent {}",
@@ -202,8 +528,84 @@ impl Store {
                     grant.grant_id
                 )));
             }
+            let grant = normalize_grant_file_authority(grant)?;
+            if grant.revocation_handle == grant.grant_id {
+                return Err(DaemonError::Refused(format!(
+                    "grant {} revocation handle must not equal the grant id",
+                    grant.grant_id
+                )));
+            }
+            if admission_state.event_ids.contains(&grant.revocation_handle) {
+                return Err(DaemonError::Refused(format!(
+                    "grant {} revocation handle {} collides with an existing journal event id",
+                    grant.grant_id, grant.revocation_handle
+                )));
+            }
+            if admission_state
+                .issued_revocation_handles
+                .contains(&grant.revocation_handle)
+            {
+                return Err(DaemonError::Refused(format!(
+                    "grant {} revocation handle {} was already issued",
+                    grant.grant_id, grant.revocation_handle
+                )));
+            }
             validate_grant_authority(&admission_state, &grant)?;
             let record = journal.append(JournalEvent::CapabilityGranted { grant }, created_at)?;
+            journal.verify_chain()?;
+            self.write_journal_record_unlocked(session_id, &record)?;
+            Ok(record)
+        })
+    }
+
+    /// Revoke an issued grant by resolving its daemon-stored revocation handle
+    /// and appending a `CapabilityRevoked` event. The caller supplies a grant id,
+    /// not a handle, so revocation cannot conjure authority for a fake handle.
+    pub fn revoke_grant(
+        &self,
+        session_id: &str,
+        grant_id: &str,
+        revoked_by: impl Into<String>,
+        reason: impl Into<String>,
+        created_at: DateTime<Utc>,
+    ) -> DaemonResult<JournalRecord> {
+        self.with_session_lock(session_id, || {
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            let Some(grant) = admission_state.grants.get(grant_id) else {
+                return Err(DaemonError::Refused(format!(
+                    "grant {grant_id} has not been issued in session {session_id}"
+                )));
+            };
+            if admission_state
+                .revoked_handles
+                .contains(&grant.revocation_handle)
+            {
+                return Err(DaemonError::Refused(format!(
+                    "grant {grant_id} is already revoked"
+                )));
+            }
+            let revoked_by = revoked_by.into();
+            if revoked_by.trim().is_empty() {
+                return Err(DaemonError::Refused(
+                    "revocation actor must not be empty".to_string(),
+                ));
+            }
+            let reason = reason.into();
+            if reason.trim().is_empty() {
+                return Err(DaemonError::Refused(
+                    "revocation reason must not be empty".to_string(),
+                ));
+            }
+            let record = journal.append(
+                JournalEvent::CapabilityRevoked {
+                    grant_id: grant.grant_id.clone(),
+                    revocation_handle: grant.revocation_handle.clone(),
+                    revoked_by,
+                    reason,
+                },
+                created_at,
+            )?;
             journal.verify_chain()?;
             self.write_journal_record_unlocked(session_id, &record)?;
             Ok(record)
@@ -221,6 +623,7 @@ impl Store {
         self.with_session_lock(session_id, || {
             let mut journal = self.load_journal_unlocked(session_id)?;
             let admission_state = admission_state_from_journal(session_id, &journal)?;
+            ensure_session_running(&admission_state.session)?;
             if mandate.session_id != session_id {
                 return Err(DaemonError::Refused(format!(
                     "payment mandate {} is bound to session {}, not {session_id}",
@@ -254,6 +657,23 @@ impl Store {
         session_id: &str,
         manifest: ActionManifest,
     ) -> DaemonResult<AdmissionOutcome> {
+        self.admit_action_with_revoked_handles(session_id, manifest, BTreeSet::new())
+    }
+
+    /// Admit an action through the daemon-owned policy path while applying the
+    /// durable journal-projected revocation registry plus an optional
+    /// operator-supplied registry snapshot.
+    ///
+    /// Revocation handles are live external evidence: the CLI or daemon front
+    /// end may receive a monotonic registry epoch from an operator, but the
+    /// daemon remains the single authority that projects grants, builds the
+    /// admission context, and journals the proposal/decision pair.
+    pub fn admit_action_with_revoked_handles(
+        &self,
+        session_id: &str,
+        manifest: ActionManifest,
+        external_revoked_handles: BTreeSet<String>,
+    ) -> DaemonResult<AdmissionOutcome> {
         self.with_session_lock(session_id, || {
             if manifest.session_id != session_id {
                 return Err(DaemonError::Refused(format!(
@@ -263,11 +683,12 @@ impl Store {
             }
             let mut journal = self.load_journal_unlocked(session_id)?;
             let admission_state = admission_state_from_journal(session_id, &journal)?;
+            ensure_session_running(&admission_state.session)?;
             let existing_proposal = admission_state.proposals.get(manifest.action_id.as_str());
             if let Some(decision) = admission_state
                 .latest_decisions
                 .get(manifest.action_id.as_str())
-                && decision.result == beater_os_core::DecisionResult::Allowed
+                && decision.result == DecisionResult::Allowed
             {
                 return Err(DaemonError::Refused(format!(
                     "action {} already has an allowed policy decision",
@@ -288,17 +709,21 @@ impl Store {
                 &admission_state,
                 manifest.action_id.as_str(),
             );
+            let mut revoked_handles = admission_state.revoked_handles;
+            revoked_handles.extend(external_revoked_handles);
             let ctx = AdmissionContext {
                 now,
                 actor_id: admission_state.session.agent_id,
                 session_id: admission_state.session.session_id,
                 policy_version: DAEMON_POLICY_VERSION.to_string(),
                 grants: admission_state.grants.into_values().collect(),
-                approvals: Vec::new(),
-                simulations: Vec::new(),
+                approvals: admission_state.approvals,
+                simulations: admission_state.simulations,
                 mandates: admission_state.mandates.into_values().collect(),
                 payment_reserved_by_mandate,
-                revoked_handles: BTreeSet::new(),
+                revoked_handles,
+                tool_registry: self.options.tool_registry.clone(),
+                require_registered_tools: self.options.require_registered_tools,
             };
             let decision = PolicyEngine::new().admit(&manifest, &ctx)?;
             let mut records_to_write = Vec::new();
@@ -341,9 +766,8 @@ impl Store {
         created_at: DateTime<Utc>,
     ) -> DaemonResult<CapabilityReceipt> {
         self.with_session_lock(session_id, || {
-            if !self.session_exists_unlocked(session_id)? {
-                return Err(DaemonError::SessionNotFound(session_id.to_string()));
-            }
+            let projection = self.project_unlocked(session_id)?;
+            ensure_session_running(&projection.session)?;
             let mut ledger = self.receipt_ledger_from_journal_unlocked(session_id)?;
             let receipt = ledger.append(input)?;
             self.append_event_unlocked(
@@ -355,6 +779,43 @@ impl Store {
             )?;
             Ok(receipt)
         })
+    }
+
+    /// Run one execution callback while holding the per-session daemon lock,
+    /// then append the returned receipt input before releasing the lock.
+    ///
+    /// This is the minimal runtime lease for local tool execution: lifecycle
+    /// transitions and competing daemon writes cannot interleave between the
+    /// running-session check and durable receipt append.
+    pub fn execute_and_append_receipt<T, E>(
+        &self,
+        session_id: &str,
+        created_at: DateTime<Utc>,
+        execute: impl FnOnce(&SessionProjection) -> Result<(CapabilityReceiptInput, T), E>,
+    ) -> Result<(CapabilityReceipt, T), E>
+    where
+        E: From<DaemonError>,
+    {
+        let _lock = self.acquire_session_lock(session_id).map_err(E::from)?;
+        let projection = self.project_unlocked(session_id).map_err(E::from)?;
+        ensure_session_running(&projection.session).map_err(E::from)?;
+        let (input, outcome) = execute(&projection)?;
+        let mut ledger = self
+            .receipt_ledger_from_journal_unlocked(session_id)
+            .map_err(E::from)?;
+        let receipt = ledger
+            .append(input)
+            .map_err(DaemonError::from)
+            .map_err(E::from)?;
+        self.append_event_unlocked(
+            session_id,
+            JournalEvent::ReceiptAppended {
+                receipt: receipt.clone(),
+            },
+            created_at,
+        )
+        .map_err(E::from)?;
+        Ok((receipt, outcome))
     }
 
     /// Load and verify a session journal under the writer lock so readers never
@@ -450,26 +911,90 @@ impl Store {
         Ok(ledger)
     }
 
+    fn load_tool_registry_unlocked(&self) -> DaemonResult<ToolRegistry> {
+        let path = self.tool_registry_path();
+        if !path.is_file() {
+            return Ok(default_runtime_tool_registry());
+        }
+        Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+    }
+
+    fn write_tool_registry_unlocked(&self, registry: &ToolRegistry) -> DaemonResult<()> {
+        fs::create_dir_all(&self.root)?;
+        let tmp_path = self.root.join(format!("{TOOL_REGISTRY_FILE}.tmp"));
+        let mut file = File::create(&tmp_path)?;
+        file.write_all(serde_json::to_string_pretty(registry)?.as_bytes())?;
+        file.write_all(
+            b"
+",
+        )?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(tmp_path, self.tool_registry_path())?;
+        Ok(())
+    }
+
     fn project_unlocked(&self, session_id: &str) -> DaemonResult<SessionProjection> {
         let journal = self.load_journal_unlocked(session_id)?;
         let mut session = None;
         let mut grants = Vec::new();
+        let mut revoked_handles = BTreeSet::new();
         let mut mandates = Vec::new();
         let mut manifests = Vec::new();
+        let mut decisions = Vec::new();
+        let mut approvals = Vec::new();
+        let mut simulations = Vec::new();
         let mut receipts = Vec::new();
         for record in journal.records() {
             match &record.event {
                 JournalEvent::SessionCreated { session: created } => {
+                    if created.session_id != session_id {
+                        return Err(DaemonError::Refused(format!(
+                            "session {session_id} journal contains SessionCreated for {}",
+                            created.session_id
+                        )));
+                    }
+                    if session.is_some() {
+                        return Err(DaemonError::Refused(format!(
+                            "session {session_id} journal contains more than one SessionCreated event"
+                        )));
+                    }
                     session = Some(created.clone());
                 }
+                JournalEvent::SessionStatusChanged {
+                    session_id: event_session_id,
+                    to,
+                    ..
+                } => {
+                    if event_session_id != session_id {
+                        return Err(DaemonError::Refused(format!(
+                            "session {session_id} journal contains status transition for {event_session_id}"
+                        )));
+                    }
+                    let Some(projected) = session.as_mut() else {
+                        return Err(DaemonError::Refused(format!(
+                            "session transition for {event_session_id} appears before SessionCreated"
+                        )));
+                    };
+                    projected.status = to.clone();
+                }
                 JournalEvent::CapabilityGranted { grant } => grants.push(grant.clone()),
+                JournalEvent::CapabilityRevoked {
+                    revocation_handle, ..
+                } => {
+                    revoked_handles.insert(revocation_handle.clone());
+                }
                 JournalEvent::PaymentMandateIssued { mandate } => mandates.push(mandate.clone()),
                 JournalEvent::ActionProposed { manifest } => {
                     manifests.push(manifest.as_ref().clone())
                 }
+                JournalEvent::PolicyDecided { decision } => decisions.push(decision.clone()),
+                JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
+                JournalEvent::SimulationRecorded { simulation } => {
+                    simulations.push(simulation.clone())
+                }
                 JournalEvent::ReceiptAppended { receipt } => receipts.push(receipt.clone()),
-                JournalEvent::PolicyDecided { .. }
-                | JournalEvent::MemoryWritten { .. }
+                JournalEvent::MemoryWritten { .. }
                 | JournalEvent::ScenarioEvaluated { .. }
                 | JournalEvent::IncidentAnnotated { .. } => {}
             }
@@ -482,8 +1007,12 @@ impl Store {
         Ok(SessionProjection {
             session,
             grants,
+            revoked_handles,
             mandates,
             manifests,
+            decisions,
+            approvals,
+            simulations,
             receipts,
         })
     }
@@ -513,6 +1042,14 @@ impl Store {
         Ok(self.session_dir(session_id)?.join(RECEIPTS_FILE))
     }
 
+    fn tool_registry_path(&self) -> PathBuf {
+        self.root.join(TOOL_REGISTRY_FILE)
+    }
+
+    fn registry_lock_path(&self) -> PathBuf {
+        self.root.join(TOOL_REGISTRY_LOCK)
+    }
+
     fn lock_path(&self, session_id: &str) -> DaemonResult<PathBuf> {
         validate_session_id(session_id)?;
         Ok(self
@@ -530,8 +1067,17 @@ impl Store {
         f()
     }
 
+    fn with_registry_lock<T>(&self, f: impl FnOnce() -> DaemonResult<T>) -> DaemonResult<T> {
+        let _lock = self.acquire_lock_path(self.registry_lock_path(), "tool-registry")?;
+        f()
+    }
+
     fn acquire_session_lock(&self, session_id: &str) -> DaemonResult<SessionLock> {
         let path = self.lock_path(session_id)?;
+        self.acquire_lock_path(path, session_id)
+    }
+
+    fn acquire_lock_path(&self, path: PathBuf, label: &str) -> DaemonResult<SessionLock> {
         let deadline = Instant::now()
             .checked_add(self.options.lock_timeout)
             .unwrap_or_else(Instant::now);
@@ -541,7 +1087,7 @@ impl Store {
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                     let now = Instant::now();
                     if now >= deadline {
-                        return Err(DaemonError::LockTimeout(session_id.to_string()));
+                        return Err(DaemonError::LockTimeout(label.to_string()));
                     }
                     let remaining = deadline.saturating_duration_since(now);
                     let poll = if self.options.lock_poll_interval.is_zero() {
@@ -555,6 +1101,13 @@ impl Store {
             }
         }
     }
+}
+
+fn default_runtime_tool_registry() -> ToolRegistry {
+    ToolRegistry::new(RegistryPolicy {
+        require_signature: false,
+        ..Default::default()
+    })
 }
 
 struct SessionLock {
@@ -595,13 +1148,45 @@ fn ensure_genesis(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<(
     }
 }
 
+fn ensure_session_running(session: &AgentSession) -> DaemonResult<()> {
+    if session.status == SessionStatus::Running {
+        Ok(())
+    } else {
+        Err(DaemonError::Refused(format!(
+            "session {} is not running (status {:?})",
+            session.session_id, session.status
+        )))
+    }
+}
+
+fn next_session_status(
+    transition: SessionTransition,
+    current: &SessionStatus,
+) -> DaemonResult<SessionStatus> {
+    match (transition, current) {
+        (SessionTransition::Pause, SessionStatus::Running) => Ok(SessionStatus::Paused),
+        (SessionTransition::Resume, SessionStatus::Paused) => Ok(SessionStatus::Running),
+        (SessionTransition::Cancel, SessionStatus::Running | SessionStatus::Paused) => {
+            Ok(SessionStatus::Canceled)
+        }
+        _ => Err(DaemonError::Refused(format!(
+            "illegal session transition {transition:?} from status {current:?}"
+        ))),
+    }
+}
+
 struct AdmissionState {
     session: AgentSession,
     grants: BTreeMap<String, CapabilityGrant>,
+    revoked_handles: BTreeSet<String>,
+    issued_revocation_handles: BTreeSet<String>,
+    event_ids: BTreeSet<String>,
     mandates: BTreeMap<String, PaymentMandate>,
     payment_reserved_by_mandate: BTreeMap<String, u64>,
     proposals: BTreeMap<String, ProposedAction>,
     latest_decisions: BTreeMap<String, PolicyDecision>,
+    approvals: Vec<ApprovalEvidence>,
+    simulations: Vec<SimulationEvidence>,
 }
 
 struct ProposedAction {
@@ -615,17 +1200,73 @@ fn admission_state_from_journal(
 ) -> DaemonResult<AdmissionState> {
     let mut session = None;
     let mut grants = BTreeMap::new();
+    let mut revoked_handles = BTreeSet::new();
+    let mut issued_revocation_handles = BTreeSet::new();
+    let mut event_ids = BTreeSet::new();
     let mut mandates = BTreeMap::new();
     let mut payment_reserved_by_mandate = BTreeMap::new();
     let mut proposals = BTreeMap::new();
     let mut latest_decisions = BTreeMap::new();
+    let mut approvals = Vec::new();
+    let mut simulations = Vec::new();
     for record in journal.records() {
         match &record.event {
             JournalEvent::SessionCreated { session: created } => {
+                if created.session_id != session_id {
+                    return Err(DaemonError::Refused(format!(
+                        "session {session_id} journal contains SessionCreated for {}",
+                        created.session_id
+                    )));
+                }
+                if session.is_some() {
+                    return Err(DaemonError::Refused(format!(
+                        "session {session_id} journal contains more than one SessionCreated event"
+                    )));
+                }
                 session = Some(created.clone());
             }
+            JournalEvent::SessionStatusChanged {
+                session_id: event_session_id,
+                to,
+                ..
+            } => {
+                if event_session_id != session_id {
+                    return Err(DaemonError::Refused(format!(
+                        "session {session_id} journal contains status transition for {event_session_id}"
+                    )));
+                }
+                let Some(projected) = session.as_mut() else {
+                    return Err(DaemonError::Refused(format!(
+                        "session transition for {event_session_id} appears before SessionCreated"
+                    )));
+                };
+                projected.status = to.clone();
+            }
             JournalEvent::CapabilityGranted { grant } => {
+                issued_revocation_handles.insert(grant.revocation_handle.clone());
                 grants.insert(grant.grant_id.clone(), grant.clone());
+            }
+            JournalEvent::CapabilityRevoked {
+                grant_id,
+                revocation_handle,
+                ..
+            } => {
+                let Some(grant) = grants.get(grant_id) else {
+                    return Err(DaemonError::Refused(format!(
+                        "revocation references grant {grant_id} before it was issued"
+                    )));
+                };
+                if grant.revocation_handle != *revocation_handle {
+                    return Err(DaemonError::Refused(format!(
+                        "revocation for grant {grant_id} uses handle {revocation_handle}, expected {}",
+                        grant.revocation_handle
+                    )));
+                }
+                if !revoked_handles.insert(revocation_handle.clone()) {
+                    return Err(DaemonError::Refused(format!(
+                        "revocation handle {revocation_handle} was recorded more than once"
+                    )));
+                }
             }
             JournalEvent::PaymentMandateIssued { mandate } => {
                 mandates.insert(mandate.mandate_id.clone(), mandate.clone());
@@ -642,10 +1283,15 @@ fn admission_state_from_journal(
             JournalEvent::PolicyDecided { decision } => {
                 latest_decisions.insert(decision.action_id.clone(), decision.clone());
             }
-            JournalEvent::ReceiptAppended { .. } => {}
-            JournalEvent::MemoryWritten { .. }
+            JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
+            JournalEvent::SimulationRecorded { simulation } => simulations.push(simulation.clone()),
+            JournalEvent::ReceiptAppended { .. }
+            | JournalEvent::MemoryWritten { .. }
             | JournalEvent::ScenarioEvaluated { .. }
             | JournalEvent::IncidentAnnotated { .. } => {}
+        }
+        if let Some(event_id) = journal_event_id(&record.event) {
+            event_ids.insert(event_id.to_string());
         }
     }
     let session = session.ok_or_else(|| {
@@ -675,10 +1321,15 @@ fn admission_state_from_journal(
     Ok(AdmissionState {
         session,
         grants,
+        revoked_handles,
+        issued_revocation_handles,
+        event_ids,
         mandates,
         payment_reserved_by_mandate,
         proposals,
         latest_decisions,
+        approvals,
+        simulations,
     })
 }
 
@@ -724,6 +1375,118 @@ fn is_payment_manifest(manifest: &ActionManifest) -> bool {
             .contains(&SideEffectClass::Payment)
 }
 
+fn journal_event_id(event: &JournalEvent) -> Option<&str> {
+    match event {
+        JournalEvent::SessionCreated { session } => Some(session.session_id.as_str()),
+        JournalEvent::SessionStatusChanged { transition_id, .. } => Some(transition_id.as_str()),
+        JournalEvent::CapabilityGranted { grant } => Some(grant.grant_id.as_str()),
+        JournalEvent::CapabilityRevoked {
+            revocation_handle, ..
+        } => Some(revocation_handle.as_str()),
+        JournalEvent::PaymentMandateIssued { mandate } => Some(mandate.mandate_id.as_str()),
+        JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
+        JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
+        JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
+        JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
+        JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),
+        JournalEvent::MemoryWritten { .. } => None,
+        JournalEvent::ScenarioEvaluated { scenario, .. } => Some(scenario.scenario_id.as_str()),
+        JournalEvent::IncidentAnnotated { incident_id, .. } => Some(incident_id.as_str()),
+    }
+}
+
+fn validate_approval_evidence(
+    state: &AdmissionState,
+    approval: &ApprovalEvidence,
+) -> DaemonResult<()> {
+    if approval.policy_version != DAEMON_POLICY_VERSION {
+        return Err(DaemonError::Refused(format!(
+            "approval {} uses unsupported policy version {}",
+            approval.review_id, approval.policy_version
+        )));
+    }
+    let Some(proposal) = state.proposals.get(&approval.action_id) else {
+        return Err(DaemonError::Refused(format!(
+            "approval {} references unproposed action {}",
+            approval.review_id, approval.action_id
+        )));
+    };
+    if proposal.manifest.digest()? != approval.manifest_hash {
+        return Err(DaemonError::Refused(format!(
+            "approval {} manifest hash does not match action {}",
+            approval.review_id, approval.action_id
+        )));
+    }
+    if !state.grants.contains_key(&approval.grant_id) {
+        return Err(DaemonError::Refused(format!(
+            "approval {} references unknown grant {}",
+            approval.review_id, approval.grant_id
+        )));
+    }
+    if approval.approved_at < proposal.record.created_at {
+        return Err(DaemonError::Refused(format!(
+            "approval {} predates action proposal {}",
+            approval.review_id, approval.action_id
+        )));
+    }
+    Ok(())
+}
+
+fn validate_simulation_evidence(
+    state: &AdmissionState,
+    simulation: &SimulationEvidence,
+) -> DaemonResult<()> {
+    if simulation.policy_version != DAEMON_POLICY_VERSION {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} uses unsupported policy version {}",
+            simulation.simulation_id, simulation.policy_version
+        )));
+    }
+    let Some(proposal) = state.proposals.get(&simulation.action_id) else {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} references unproposed action {}",
+            simulation.simulation_id, simulation.action_id
+        )));
+    };
+    if proposal.manifest.digest()? != simulation.manifest_hash {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} manifest hash does not match action {}",
+            simulation.simulation_id, simulation.action_id
+        )));
+    }
+    if simulation.passed_at < proposal.record.created_at {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} predates action proposal {}",
+            simulation.simulation_id, simulation.action_id
+        )));
+    }
+    let Some(decision) = state.latest_decisions.get(simulation.action_id.as_str()) else {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} references action {} without a policy decision",
+            simulation.simulation_id, simulation.action_id
+        )));
+    };
+    if decision.result != DecisionResult::NeedsSimulation {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} references action {} without a latest NeedsSimulation decision",
+            simulation.simulation_id, simulation.action_id
+        )));
+    }
+    let Some(required_simulation) = &decision.required_simulation else {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} references action {} whose decision has no simulation requirement",
+            simulation.simulation_id, simulation.action_id
+        )));
+    };
+    if &simulation.scenario_id != required_simulation {
+        return Err(DaemonError::Refused(format!(
+            "simulation {} scenario {} does not match required simulation {}",
+            simulation.simulation_id, simulation.scenario_id, required_simulation
+        )));
+    }
+    Ok(())
+}
+
 fn validate_grant_authority(state: &AdmissionState, grant: &CapabilityGrant) -> DaemonResult<()> {
     if let Some(parent_id) = &grant.parent_grant_id {
         let Some(parent) = state.grants.get(parent_id) else {
@@ -741,6 +1504,12 @@ fn validate_grant_authority(state: &AdmissionState, grant: &CapabilityGrant) -> 
         if parent.delegation == DelegationMode::None {
             return Err(DaemonError::Refused(format!(
                 "grant {} parent {} is not delegable",
+                grant.grant_id, parent.grant_id
+            )));
+        }
+        if state.revoked_handles.contains(&parent.revocation_handle) || parent.revoked {
+            return Err(DaemonError::Refused(format!(
+                "grant {} parent {} is revoked",
                 grant.grant_id, parent.grant_id
             )));
         }
@@ -775,6 +1544,89 @@ fn validate_grant_authority(state: &AdmissionState, grant: &CapabilityGrant) -> 
                 grant.grant_id, grant.issuer, state.session.created_by
             )));
         }
+    }
+    Ok(())
+}
+
+fn grant_effectively_active(
+    grant: &CapabilityGrant,
+    now: DateTime<Utc>,
+    revoked_handles: &BTreeSet<String>,
+    grants_by_id: &BTreeMap<&str, &CapabilityGrant>,
+) -> bool {
+    let mut current = grant;
+    let mut seen = BTreeSet::new();
+    loop {
+        if !current.is_active_at(now) || revoked_handles.contains(&current.revocation_handle) {
+            return false;
+        }
+        let Some(parent_id) = current.parent_grant_id.as_deref() else {
+            return true;
+        };
+        if !seen.insert(current.grant_id.as_str()) {
+            return false;
+        }
+        let Some(parent) = grants_by_id.get(parent_id) else {
+            return false;
+        };
+        current = *parent;
+    }
+}
+
+fn normalize_grant_file_authority(mut grant: CapabilityGrant) -> DaemonResult<CapabilityGrant> {
+    if grant.scope.selector.resource_kind == ResourceKind::FilePath
+        && grant.scope.selector.resource_id != "*"
+    {
+        grant.scope.selector.resource_id = canonical_existing_file_authority_or_lexical(
+            "resource-id",
+            &grant.scope.selector.resource_id,
+        )?;
+    }
+    let mut normalized_prefixes = BTreeSet::new();
+    for prefix in &grant.constraints.path_prefixes {
+        normalized_prefixes.insert(canonical_existing_file_authority("path-prefix", prefix)?);
+    }
+    grant.constraints.path_prefixes = normalized_prefixes;
+    Ok(grant)
+}
+
+fn canonical_existing_file_authority_or_lexical(field: &str, value: &str) -> DaemonResult<String> {
+    validate_absolute_lexical_file_authority(field, value)?;
+    match fs::canonicalize(Path::new(value)) {
+        Ok(canonical) => Ok(canonical.display().to_string()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(value.to_string()),
+        Err(err) => Err(DaemonError::Refused(format!(
+            "file grant {field} {value:?} cannot be canonicalized: {err}"
+        ))),
+    }
+}
+
+fn canonical_existing_file_authority(field: &str, value: &str) -> DaemonResult<String> {
+    validate_absolute_lexical_file_authority(field, value)?;
+    fs::canonicalize(Path::new(value))
+        .map(|canonical| canonical.display().to_string())
+        .map_err(|err| {
+            DaemonError::Refused(format!(
+                "file grant {field} {value:?} cannot be canonicalized: {err}"
+            ))
+        })
+}
+
+fn validate_absolute_lexical_file_authority(field: &str, value: &str) -> DaemonResult<()> {
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir
+                    | std::path::Component::ParentDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Err(DaemonError::Refused(format!(
+            "file grant {field} {value:?} must be an absolute canonical path"
+        )));
     }
     Ok(())
 }

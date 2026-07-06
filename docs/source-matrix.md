@@ -134,13 +134,25 @@ current-version claim.
 
 | Source | beaterOS use | Caveat |
 | --- | --- | --- |
-| Rust release blog, Rust 1.96.1, 2026-06-30: https://blog.rust-lang.org/2026/06/30/Rust-1.96.1/ | Current Rust release verification and Cargo/rustup update provenance | Use the repo-pinned toolchain unless a PR explicitly updates it |
+| Rust release blog, Rust 1.96.1, 2026-06-30: https://blog.rust-lang.org/2026/06/30/Rust-1.96.1/ | Current Rust release verification and Cargo/rustup update provenance | The workspace baseline is pinned separately in `rust-toolchain.toml`; use the newer release only when a PR explicitly justifies and measures the toolchain change |
 | LLVM project home/release page, LLVM 22.1.8, 2026-06-16: https://llvm.org/ | Compiler/backend, sanitizer, C/C++/Rust backend, and toolchain-version checks | LLVM version alone does not prove a Rust, Apple Clang, or vendor compiler behavior |
 | Zig download page, 0.16.0 release and 0.17.0-dev snapshots: https://ziglang.org/download/ | Freestanding/cross-compilation experiment tracking | Zig remains non-TCB until stability and reviewer coverage are proven |
 | Swift.org macOS install page and Swift 6.3.3 announcement: https://swift.org/install/macos/ and https://forums.swift.org/t/announcing-swift-6-3-3/87888 | Apple-native platform integration and Swift build-tooling awareness | Swift is not the beaterOS authority boundary |
 | Go downloads page, Go 1.26.4 artifacts: https://go.dev/dl/ | Non-TCB infrastructure daemon/tooling version checks | Go is not used for policy, journals, receipts, or scheduler authority paths |
 | Python downloads page, Python 3.14.6, 2026-06-10: https://www.python.org/downloads/ | Audit/research script runtime freshness | Python scripts must remain bounded and non-authoritative |
 | NVIDIA CUDA Programming Guide: https://docs.nvidia.com/cuda/cuda-programming-guide/index.html | GPU programming model, memory hierarchy, streams, launch/occupancy vocabulary | CUDA is a backend, not the OS contract |
+
+## Eval Statistics Inputs
+
+These sources support `final.md` §14.9 and
+`docs/design/eval-statistical-method.md`. They define how beaterOS release gates
+avoid single-run point estimates for probabilistic agents.
+
+| Source | beaterOS use | Caveat |
+| --- | --- | --- |
+| tau-bench, `arXiv:2406.12045`, submitted 2024-06-17: https://arxiv.org/abs/2406.12045 | pass^k reliability metric for repeated agent trials; motivates reporting reliability across k consecutive successes | Benchmark domains are not beaterOS requirements; the metric is the reusable input |
+| Adding Error Bars to Evals, `arXiv:2411.00640`, submitted 2024-11-01: https://arxiv.org/abs/2411.00640 | Error bars, paired model comparisons, and experiment-planning discipline for language-model evals | Preprint guidance; beaterOS still needs local gate calibration |
+| Sequential Testing for Early Stopping of Online Experiments, SIGIR 2015: https://dl.acm.org/doi/10.1145/2766462.2767729 | Sequential stopping pattern so expensive multi-trial agent evals can stop once evidence is decisive | Online-experiment setting, not agent-specific; gate configs must declare stopping rules before runs |
 
 ## Maintenance Rules
 

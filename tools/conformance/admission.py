@@ -18,6 +18,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from canonical import sha256_hex
+
 # Enum orderings mirror the `#[derive(Ord)]` declaration order in contracts.rs.
 RISK_ORDER = ["low", "medium", "high", "critical"]
 DATA_CLASS_ORDER = [
@@ -154,6 +156,38 @@ def grant_is_active_at(grant: dict, now: datetime) -> bool:
     return not grant.get("revoked", False) and _ts(grant["expires_at"]) > now
 
 
+def grant_chain_effectively_active(
+    grant: dict, ctx: dict, grants_by_id: dict[str, dict], now: datetime
+) -> bool:
+    """Return whether a grant and all delegation ancestors are live.
+
+    This mirrors Rust `grant_chain_effectively_active`: missing, revoked,
+    expired, registry-revoked, or cyclic delegation chains are not live
+    authority and therefore hard-deny before any narrowing/approval path.
+    """
+    current = grant
+    visited: set[str] = set()
+    revoked_handles = set(ctx.get("revoked_handles", []))
+    while True:
+        grant_id = current["grant_id"]
+        if grant_id in visited:
+            return False
+        visited.add(grant_id)
+
+        if not grant_is_active_at(current, now):
+            return False
+        if current.get("revocation_handle") in revoked_handles:
+            return False
+
+        parent_id = current.get("parent_grant_id")
+        if parent_id is None:
+            return True
+        parent = grants_by_id.get(parent_id)
+        if parent is None:
+            return False
+        current = parent
+
+
 def grant_allows_manifest(grant: dict, manifest: dict, now: datetime, actor_id: str) -> bool:
     if not grant_is_active_at(grant, now):
         return False
@@ -222,13 +256,12 @@ def has_external_side_effect(manifest: dict) -> bool:
 
 
 def _approval_from_reviewer(grant, manifest, ctx, now, reviewer_id) -> bool:
-    # NOTE: binds on action_id, not the manifest body hash. The Rust core's HEAD
-    # additionally binds evidence to a manifest_hash; adopting that here depends on
-    # the canonical-hashing convergence tracked in tools/conformance/README.md.
+    manifest_hash = sha256_hex(manifest)
     for ap in ctx.get("approvals", []):
         if (
             _ts(ap["approved_at"]) <= now
             and ap["action_id"] == manifest["action_id"]
+            and ap["manifest_hash"] == manifest_hash
             and ap["grant_id"] == grant["grant_id"]
             and ap["policy_version"] == ctx["policy_version"]
             and ap["reviewer_id"] == reviewer_id
@@ -257,13 +290,13 @@ def _explicit_action_evidence_exists(grant, manifest, ctx, now) -> bool:
 
     Reviewer-agnostic: used only for the `mode == none` untrusted case, where the
     grant configures no authorized reviewers but an untrusted dangerous action
-    still needs explicit human sign-off bound to this exact action+grant+policy.
-    Evidence binds on action_id (not manifest body hash) pending the cross-language
-    canonical-hashing convergence tracked in tools/conformance/README.md.
+    still needs explicit human sign-off bound to this exact manifest+grant+policy.
     """
+    manifest_hash = sha256_hex(manifest)
     return any(
         _ts(ap["approved_at"]) <= now
         and ap["action_id"] == manifest["action_id"]
+        and ap["manifest_hash"] == manifest_hash
         and ap["grant_id"] == grant["grant_id"]
         and ap["policy_version"] == ctx["policy_version"]
         for ap in ctx.get("approvals", [])
@@ -301,10 +334,12 @@ def _untrusted_dangerous_approved(grant, manifest, ctx, now) -> bool:
 
 
 def _has_passed_simulation(manifest, ctx, now) -> bool:
+    manifest_hash = sha256_hex(manifest)
     for sim in ctx.get("simulations", []):
         if (
             _ts(sim["passed_at"]) <= now
             and sim["action_id"] == manifest["action_id"]
+            and sim["manifest_hash"] == manifest_hash
             and sim["policy_version"] == ctx["policy_version"]
         ):
             return True
@@ -458,6 +493,11 @@ def admit(manifest: dict, ctx: dict) -> dict:
     if len(matching) != len(required):
         return deny("one or more required grants are missing from the admission context")
     matched.append("required_grants_available")
+
+    grants_by_id = {g["grant_id"]: g for g in ctx.get("grants", [])}
+    if not all(grant_chain_effectively_active(g, ctx, grants_by_id, now) for g in matching):
+        return deny("a required grant or one of its delegation ancestors is revoked, expired, or missing")
+    matched.append("grant_delegation_chain_active")
 
     actor_id = ctx["actor_id"]
     if not all(grant_allows_manifest(g, manifest, now, actor_id) for g in matching):

@@ -1,14 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use beater_os_core::{
-    ActionKind, ActionManifest, AdmissionContext, ApprovalEvidence, ApprovalMode,
-    ApprovalRequirement, Budget, CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput,
-    CapabilityScope, CapabilitySelector, DataClass, DecisionResult, DelegationMode,
-    GrantConstraints, InMemoryJournal, JournalEvent, PaymentIntent, PaymentMandate, PolicyDecision,
-    PolicyEngine, ReceiptLedger, ResourceKind, RiskClass, SideEffectClass, SimulationEvidence,
-    TaintLabel,
+    ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, ApprovalMode,
+    ApprovalRequirement, BeaterOsError, Budget, CapabilityGrant, CapabilityReceipt,
+    CapabilityReceiptInput, CapabilityScope, CapabilitySelector, DataClass, DecisionResult,
+    DelegationMode, GrantConstraints, HashValue, InMemoryJournal, JournalEvent, MemoryRecord,
+    PaymentIntent, PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind,
+    RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, TaintLabel, ToolManifest,
+    hash_json,
 };
 use chrono::{Duration, TimeZone, Utc};
+use serde::Serialize;
 
 fn fixed_time() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 7, 3, 12, 0, 0)
@@ -76,7 +78,52 @@ fn admission_context(now: chrono::DateTime<Utc>, grants: Vec<CapabilityGrant>) -
         mandates: Vec::new(),
         payment_reserved_by_mandate: BTreeMap::new(),
         revoked_handles: BTreeSet::new(),
+        tool_registry: BTreeMap::new(),
+        require_registered_tools: false,
     }
+}
+
+fn session_fixture(status: SessionStatus) -> AgentSession {
+    AgentSession {
+        session_id: "session-1".to_string(),
+        created_at: fixed_time(),
+        created_by: "user:jaden".to_string(),
+        agent_id: "agent:beater-os".to_string(),
+        workspace_id: "workspace-1".to_string(),
+        goal: "exercise the session lifecycle".to_string(),
+        constraints: Vec::new(),
+        policy_profile: "policy-v1".to_string(),
+        initial_capability_ids: BTreeSet::new(),
+        budget: Budget::default(),
+        model_policy: Default::default(),
+        memory_scope: None,
+        journal_root: "root".to_string(),
+        status,
+    }
+}
+
+fn registered_tool(
+    tool_id: &str,
+    risk_class: RiskClass,
+    side_effects: impl IntoIterator<Item = SideEffectClass>,
+) -> ToolManifest {
+    ToolManifest {
+        tool_id: tool_id.to_string(),
+        publisher: "beater.tools".to_string(),
+        version: "1.0.0".to_string(),
+        transport: "local".to_string(),
+        required_capabilities: Vec::new(),
+        side_effects: set(side_effects),
+        risk_class,
+        sandbox_required: false,
+    }
+}
+
+fn registry(tools: impl IntoIterator<Item = ToolManifest>) -> BTreeMap<String, ToolManifest> {
+    tools
+        .into_iter()
+        .map(|tool| (tool.tool_id.clone(), tool))
+        .collect()
 }
 
 fn mandate_for_spend(now: chrono::DateTime<Utc>) -> PaymentMandate {
@@ -232,6 +279,144 @@ fn policy_requires_narrowed_grant_for_over_risk_action() {
     assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
 }
 
+#[test]
+fn policy_raises_effective_risk_for_registered_tool_floor() {
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let mut ctx = admission_context(now, vec![grant_for_file(now)]);
+    ctx.tool_registry = registry([registered_tool(
+        "tool:repo-reader",
+        RiskClass::High,
+        [SideEffectClass::None],
+    )]);
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
+    assert!(
+        decision
+            .matched_rules
+            .iter()
+            .any(|rule| rule.contains("registered_tool_grounding=present")
+                && rule.contains("effective_risk=High")),
+        "registered tool floor must be recorded: {:?}",
+        decision.matched_rules
+    );
+}
+
+#[test]
+fn policy_denies_manifest_that_omits_registered_tool_side_effect() {
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let mut ctx = admission_context(now, vec![grant_for_file(now)]);
+    ctx.tool_registry = registry([registered_tool(
+        "tool:repo-reader",
+        RiskClass::Medium,
+        [SideEffectClass::NetworkWrite],
+    )]);
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("omits a side effect"));
+}
+
+#[test]
+fn policy_admits_manifest_that_over_declares_registered_tool() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.risk_class = RiskClass::Medium;
+    let mut ctx = admission_context(now, vec![grant_for_file(now)]);
+    ctx.tool_registry = registry([registered_tool(
+        "tool:repo-reader",
+        RiskClass::Low,
+        [SideEffectClass::None],
+    )]);
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Allowed);
+}
+
+#[test]
+fn policy_denies_unregistered_tool_when_required_by_context() {
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let mut ctx = admission_context(now, vec![grant_for_file(now)]);
+    ctx.require_registered_tools = true;
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("not registered"));
+}
+
+#[test]
+fn policy_records_explicit_compatibility_for_unregistered_tool() {
+    let now = fixed_time();
+    let manifest = read_manifest();
+    let ctx = admission_context(now, vec![grant_for_file(now)]);
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Allowed);
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"tool_registry_lookup=missing;require_registered_tools=false".to_string())
+    );
+}
+
+#[test]
+fn registered_payment_side_effect_cannot_be_laundered_as_read() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.expected_side_effects = set([SideEffectClass::Payment]);
+    manifest.idempotency_key = Some("pay-once".to_string());
+    let mut ctx = admission_context(now, vec![grant_for_file(now)]);
+    ctx.tool_registry = registry([registered_tool(
+        "tool:repo-reader",
+        RiskClass::High,
+        [SideEffectClass::Payment],
+    )]);
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("spend action kind"));
+}
+
+#[test]
+fn registered_deployment_side_effect_cannot_be_laundered_as_execute() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Execute;
+    manifest.target = CapabilitySelector {
+        resource_kind: ResourceKind::Tool,
+        resource_id: "deploy-runner".to_string(),
+    };
+    manifest.resolved_target = None;
+    manifest.expected_side_effects = set([SideEffectClass::Deployment]);
+    manifest.required_grants = set(["grant-execute".to_string()]);
+    manifest.risk_class = RiskClass::High;
+    manifest.idempotency_key = Some("deploy-once".to_string());
+
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-execute".to_string();
+    grant.scope.selector = CapabilitySelector {
+        resource_kind: ResourceKind::Tool,
+        resource_id: "deploy-runner".to_string(),
+    };
+    grant.scope.actions = set([ActionKind::Execute]);
+    grant.constraints.max_risk = Some(RiskClass::Critical);
+    grant.approval = ApprovalRequirement::default();
+
+    let mut ctx = admission_context(now, vec![grant]);
+    ctx.tool_registry = registry([registered_tool(
+        "tool:repo-reader",
+        RiskClass::High,
+        [SideEffectClass::Deployment],
+    )]);
+
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("deploy action kind"));
+}
+
 fn root_grant(now: chrono::DateTime<Utc>) -> CapabilityGrant {
     let mut grant = grant_for_file(now);
     grant.grant_id = "grant-parent".to_string();
@@ -244,6 +429,20 @@ fn delegated_child(now: chrono::DateTime<Utc>) -> CapabilityGrant {
     // delegated from grant-parent so its liveness depends on the parent's.
     let mut grant = grant_for_file(now);
     grant.parent_grant_id = Some("grant-parent".to_string());
+    grant
+}
+
+fn delegated_middle(now: chrono::DateTime<Utc>) -> CapabilityGrant {
+    let mut grant = grant_for_file(now);
+    grant.grant_id = "grant-middle".to_string();
+    grant.revocation_handle = "revoke:grant-middle".to_string();
+    grant.parent_grant_id = Some("grant-parent".to_string());
+    grant
+}
+
+fn delegated_grandchild(now: chrono::DateTime<Utc>) -> CapabilityGrant {
+    let mut grant = grant_for_file(now);
+    grant.parent_grant_id = Some("grant-middle".to_string());
     grant
 }
 
@@ -267,6 +466,38 @@ fn policy_denies_delegated_grant_when_parent_is_revoked_through_registry() {
     let now = fixed_time();
     let mut ctx = admission_context(now, vec![root_grant(now), delegated_child(now)]);
     ctx.revoked_handles = set(["revoke:grant-parent".to_string()]);
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("delegation ancestors"));
+}
+
+#[test]
+fn policy_denies_three_level_delegation_when_ancestor_is_revoked_through_registry() {
+    let now = fixed_time();
+    let mut ctx = admission_context(
+        now,
+        vec![
+            root_grant(now),
+            delegated_middle(now),
+            delegated_grandchild(now),
+        ],
+    );
+    ctx.revoked_handles = set(["revoke:grant-parent".to_string()]);
+
+    let decision = admit(&read_manifest(), &ctx);
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(decision.explanation.contains("delegation ancestors"));
+
+    let mut ctx = admission_context(
+        now,
+        vec![
+            root_grant(now),
+            delegated_middle(now),
+            delegated_grandchild(now),
+        ],
+    );
+    ctx.revoked_handles = set(["revoke:grant-middle".to_string()]);
+
     let decision = admit(&read_manifest(), &ctx);
     assert_eq!(decision.result, DecisionResult::Denied);
     assert!(decision.explanation.contains("delegation ancestors"));
@@ -311,10 +542,64 @@ fn policy_enforces_path_prefix_constraints_even_with_wildcard_resource() {
     let now = fixed_time();
     let mut manifest = read_manifest();
     manifest.target.resource_id = "/workspace/repo_evil/secrets.txt".to_string();
+    manifest.resolved_target = Some(CapabilitySelector {
+        resource_kind: ResourceKind::FilePath,
+        resource_id: "/workspace/repo_evil/secrets.txt".to_string(),
+    });
     let mut grant = grant_for_file(now);
     grant.scope.selector.resource_id = "*".to_string();
     let ctx = admission_context(now, vec![grant]);
     let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
+}
+
+#[test]
+fn policy_admits_canonical_mediated_file_target_for_path_prefix_authority() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Execute;
+    manifest.target.resource_id = "/workspace/repo/file.txt".to_string();
+    manifest.resolved_target = Some(CapabilitySelector {
+        resource_kind: ResourceKind::FilePath,
+        resource_id: "/workspace/repo/file.txt".to_string(),
+    });
+    let mut grant = grant_for_file(now);
+    grant.scope.selector.resource_id = "*".to_string();
+    grant.scope.actions = set([ActionKind::Execute]);
+    let decision = admit(&manifest, &admission_context(now, vec![grant]));
+    assert_eq!(decision.result, DecisionResult::Allowed);
+}
+
+#[test]
+fn policy_admits_canonical_mediated_file_target_for_concrete_file_grant_authority() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Execute;
+    manifest.target.resource_id = "/workspace/repo".to_string();
+    manifest.resolved_target = Some(CapabilitySelector {
+        resource_kind: ResourceKind::FilePath,
+        resource_id: "/workspace/repo".to_string(),
+    });
+    let mut grant = grant_for_file(now);
+    grant.scope.actions = set([ActionKind::Execute]);
+    let decision = admit(&manifest, &admission_context(now, vec![grant]));
+    assert_eq!(decision.result, DecisionResult::Allowed);
+}
+
+#[test]
+fn raw_file_proposal_cannot_launder_requested_path_through_resolved_target() {
+    let now = fixed_time();
+    let mut manifest = read_manifest();
+    manifest.action_kind = ActionKind::Execute;
+    manifest.target.resource_id = "/etc/hosts".to_string();
+    manifest.resolved_target = Some(CapabilitySelector {
+        resource_kind: ResourceKind::FilePath,
+        resource_id: "/workspace/repo/hosts".to_string(),
+    });
+    let mut grant = grant_for_file(now);
+    grant.scope.selector.resource_id = "*".to_string();
+    grant.scope.actions = set([ActionKind::Execute]);
+    let decision = admit(&manifest, &admission_context(now, vec![grant]));
     assert_eq!(decision.result, DecisionResult::NeedsNarrowedGrant);
 }
 
@@ -1016,7 +1301,7 @@ fn policy_requires_action_bound_simulation_evidence() {
         simulation_id: "sim-1".to_string(),
         action_id: "different-action".to_string(),
         manifest_hash: manifest_hash(&manifest),
-        scenario_id: "deploy-scenario".to_string(),
+        scenario_id: "action:action-1:high-risk-side-effect-simulation".to_string(),
         passed_at: now,
         policy_version: "policy-v1".to_string(),
     });
@@ -1024,6 +1309,11 @@ fn policy_requires_action_bound_simulation_evidence() {
     assert_eq!(decision.result, DecisionResult::NeedsSimulation);
 
     ctx.simulations[0].action_id = "action-1".to_string();
+    ctx.simulations[0].scenario_id = "scenario:wrong".to_string();
+    let decision = admit(&manifest, &ctx);
+    assert_eq!(decision.result, DecisionResult::NeedsSimulation);
+
+    ctx.simulations[0].scenario_id = "action:action-1:high-risk-side-effect-simulation".to_string();
     let decision = admit(&manifest, &ctx);
     assert_eq!(decision.result, DecisionResult::Allowed);
 }
@@ -1069,7 +1359,7 @@ fn policy_rejects_simulation_evidence_for_stale_manifest_hash() {
         simulation_id: "sim-1".to_string(),
         action_id: "action-1".to_string(),
         manifest_hash: manifest_hash(&stale_manifest),
-        scenario_id: "deploy-scenario".to_string(),
+        scenario_id: "action:action-1:high-risk-side-effect-simulation".to_string(),
         passed_at: now,
         policy_version: "policy-v1".to_string(),
     });
@@ -1115,7 +1405,7 @@ fn policy_rejects_future_dated_simulation_evidence() {
         simulation_id: "sim-1".to_string(),
         action_id: "action-1".to_string(),
         manifest_hash: manifest_hash(&manifest),
-        scenario_id: "deploy-scenario".to_string(),
+        scenario_id: "action:action-1:high-risk-side-effect-simulation".to_string(),
         passed_at: now + Duration::minutes(1),
         policy_version: "policy-v1".to_string(),
     });
@@ -1189,6 +1479,64 @@ fn journal_rejects_decision_for_stale_manifest_hash() -> Result<(), Box<dyn std:
     Ok(())
 }
 
+#[test]
+fn journal_accepts_legal_session_status_transition() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session_fixture(SessionStatus::Running),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::SessionStatusChanged {
+            transition_id: "transition-1".to_string(),
+            session_id: "session-1".to_string(),
+            from: SessionStatus::Running,
+            to: SessionStatus::Paused,
+        },
+        now + Duration::seconds(1),
+    )?;
+    journal.append(
+        JournalEvent::MemoryWritten {
+            memory: memory_record("mem-transition", "transition-1", now),
+        },
+        now + Duration::seconds(2),
+    )?;
+
+    assert!(journal.verify_chain().is_ok());
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_illegal_session_status_transition() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session_fixture(SessionStatus::Running),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::SessionStatusChanged {
+            transition_id: "transition-bad".to_string(),
+            session_id: "session-1".to_string(),
+            from: SessionStatus::Running,
+            to: SessionStatus::Completed,
+        },
+        now + Duration::seconds(1),
+    )?;
+
+    let err = journal.verify_chain().err();
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = err else {
+        panic!("expected lifecycle causality error");
+    };
+    assert!(reason.contains("illegal session transition"));
+    Ok(())
+}
+
 fn receipt_for_manifest(
     manifest: &ActionManifest,
     now: chrono::DateTime<Utc>,
@@ -1214,6 +1562,35 @@ fn receipt_for_manifest(
             artifact_refs: Vec::new(),
         })
         .unwrap_or_else(|err| panic!("receipt fixture should be valid: {err}"))
+}
+
+fn memory_record(
+    memory_id: &str,
+    source_event_id: &str,
+    now: chrono::DateTime<Utc>,
+) -> MemoryRecord {
+    MemoryRecord {
+        memory_id: memory_id.to_string(),
+        source_event_id: source_event_id.to_string(),
+        source_digest: format!("sha256:{source_event_id}"),
+        writer: "agent:beater-os".to_string(),
+        created_at: now,
+        kind: "summary".to_string(),
+        content_ref: format!("memory://{memory_id}"),
+        summary: "derived from a journaled source".to_string(),
+        confidence_basis_points: 9_000,
+        sensitivity: DataClass::Internal,
+        expires_at: None,
+        access_policy: "session".to_string(),
+    }
+}
+
+#[derive(Serialize)]
+struct TestJournalHashView<'a> {
+    seq: u64,
+    created_at: &'a chrono::DateTime<Utc>,
+    event: &'a JournalEvent,
+    prev_hash: &'a HashValue,
 }
 
 #[test]
@@ -1319,6 +1696,113 @@ fn journal_rejects_receipt_that_does_not_match_manifest() -> Result<(), Box<dyn 
     )?;
     journal.append(JournalEvent::ReceiptAppended { receipt }, now)?;
     assert!(journal.verify_chain().is_err());
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_memory_without_source_event() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    let err = journal
+        .append(
+            JournalEvent::MemoryWritten {
+                memory: memory_record("mem-1", "", now),
+            },
+            now,
+        )
+        .err();
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = err else {
+        panic!("expected journal causality error");
+    };
+    assert!(reason.contains("empty source_event_id"));
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_memory_with_unknown_source_event() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::IncidentAnnotated {
+            incident_id: "source-1".to_string(),
+            note: "source event".to_string(),
+        },
+        now,
+    )?;
+    let err = journal
+        .append(
+            JournalEvent::MemoryWritten {
+                memory: memory_record("mem-1", "missing-source", now),
+            },
+            now,
+        )
+        .err();
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = err else {
+        panic!("expected journal causality error");
+    };
+    assert!(reason.contains("unknown source event"));
+    Ok(())
+}
+
+#[test]
+fn journal_accepts_memory_with_prior_source_event() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::IncidentAnnotated {
+            incident_id: "source-1".to_string(),
+            note: "source event".to_string(),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::MemoryWritten {
+            memory: memory_record("mem-1", "source-1", now),
+        },
+        now,
+    )?;
+    assert!(journal.verify_chain().is_ok());
+    Ok(())
+}
+
+#[test]
+fn journal_verify_rejects_tampered_memory_source_event() -> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::IncidentAnnotated {
+            incident_id: "source-1".to_string(),
+            note: "source event".to_string(),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::MemoryWritten {
+            memory: memory_record("mem-1", "source-1", now),
+        },
+        now,
+    )?;
+
+    let mut records = journal.snapshot().records;
+    if let JournalEvent::MemoryWritten { memory } = &mut records[1].event {
+        memory.source_event_id = "missing-source".to_string();
+        memory.source_digest = "sha256:missing-source".to_string();
+    } else {
+        panic!("memory record missing");
+    }
+    records[1].hash = hash_json(&TestJournalHashView {
+        seq: records[1].seq,
+        created_at: &records[1].created_at,
+        event: &records[1].event,
+        prev_hash: &records[1].prev_hash,
+    })?;
+
+    let tampered = InMemoryJournal::from_records(records);
+    let err = tampered.verify_chain().err();
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = err else {
+        panic!("expected journal causality error");
+    };
+    assert!(reason.contains("unknown source event"));
     Ok(())
 }
 
