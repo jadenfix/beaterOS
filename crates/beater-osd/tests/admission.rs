@@ -298,6 +298,42 @@ fn pending_allowed_action_reserves_session_tool_budget_before_receipt() {
     );
 }
 
+#[test]
+fn current_pending_action_budget_is_excluded_during_readmission() {
+    let root = TempDir::new("readmit-budget");
+    let store = Store::open(&root.path).unwrap();
+    let session_id = "sess_readmit_budget";
+    let mut session = session_with_initial(&root, session_id, ["grant-deploy"]);
+    session.budget = Budget {
+        max_model_cents: None,
+        max_tool_calls: Some(1),
+        max_wall_ms: None,
+        max_payment_minor_units: None,
+    };
+    store.create_session(&session).unwrap();
+    append_grant(&store, session_id, deploy_grant(session_id));
+
+    let mut action = deploy_manifest(session_id, "act-readmit-budget");
+    action.requested_budget.max_tool_calls = Some(1);
+    let first = store.admit_action(session_id, action.clone()).unwrap();
+    assert_eq!(first.decision.result, DecisionResult::NeedsApproval);
+
+    store
+        .record_approval(session_id, approval_for(&action), Utc::now())
+        .unwrap();
+    let second = store.admit_action(session_id, action).unwrap();
+
+    assert_eq!(second.decision.result, DecisionResult::NeedsSimulation);
+    assert!(
+        !second
+            .decision
+            .explanation
+            .contains("session budget exceeded"),
+        "{}",
+        second.decision.explanation
+    );
+}
+
 fn receipt_input(action_id: &str) -> CapabilityReceiptInput {
     CapabilityReceiptInput {
         receipt_id: None,

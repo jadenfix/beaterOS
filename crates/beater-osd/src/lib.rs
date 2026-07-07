@@ -730,6 +730,8 @@ impl Store {
                 &admission_state,
                 manifest.action_id.as_str(),
             );
+            let session_budget_used =
+                runtime_budget_used_excluding(&admission_state, manifest.action_id.as_str());
             let mut revoked_handles = admission_state.revoked_handles;
             revoked_handles.extend(external_revoked_handles);
             let ctx = AdmissionContext {
@@ -738,7 +740,7 @@ impl Store {
                 session_id: admission_state.session.session_id,
                 policy_version: DAEMON_POLICY_VERSION.to_string(),
                 session_budget: admission_state.session.budget,
-                session_budget_used: admission_state.session_budget_used,
+                session_budget_used,
                 grants: admission_state.grants.into_values().collect(),
                 approvals: admission_state.approvals,
                 simulations: admission_state.simulations,
@@ -1248,6 +1250,7 @@ struct AdmissionState {
     mandates: BTreeMap<String, PaymentMandate>,
     payment_reserved_by_mandate: BTreeMap<String, u64>,
     session_budget_used: Budget,
+    pending_runtime_budget_by_action: BTreeMap<String, Budget>,
     proposals: BTreeMap<String, ProposedAction>,
     latest_decisions: BTreeMap<String, PolicyDecision>,
     approvals: Vec<ApprovalEvidence>,
@@ -1398,6 +1401,7 @@ fn admission_state_from_journal(
                 ))
             })?;
     }
+    let mut pending_runtime_budget_by_action = BTreeMap::new();
     for (action_id, decision) in &latest_decisions {
         if !reserves_runtime_budget(decision.result.clone())
             || receipted_actions.contains(action_id)
@@ -1409,7 +1413,14 @@ fn admission_state_from_journal(
                 "runtime-budget-reserving policy decision for action {action_id} has no proposed manifest"
             )));
         };
-        debit_manifest_budget(&mut session_budget_used, &proposal.manifest)?;
+        let mut reserved = Budget::default();
+        debit_manifest_budget(&mut reserved, &proposal.manifest)?;
+        debit_budget(
+            &mut session_budget_used,
+            &reserved,
+            &proposal.manifest.action_id,
+        )?;
+        pending_runtime_budget_by_action.insert(action_id.clone(), reserved);
     }
 
     Ok(AdmissionState {
@@ -1421,6 +1432,7 @@ fn admission_state_from_journal(
         mandates,
         payment_reserved_by_mandate,
         session_budget_used,
+        pending_runtime_budget_by_action,
         proposals,
         latest_decisions,
         approvals,
@@ -1498,6 +1510,53 @@ fn debit_manifest_budget(budget: &mut Budget, manifest: &ActionManifest) -> Daem
         })?;
     }
     Ok(())
+}
+
+fn debit_budget(budget: &mut Budget, requested: &Budget, action_id: &str) -> DaemonResult<()> {
+    if let Some(requested) = requested.max_tool_calls {
+        let tool_calls = budget.max_tool_calls.get_or_insert(0);
+        *tool_calls = tool_calls.checked_add(requested).ok_or_else(|| {
+            DaemonError::Refused(format!(
+                "session budget replay overflowed pending tool-call reservation for action {action_id}"
+            ))
+        })?;
+    }
+    if let Some(requested) = requested.max_wall_ms {
+        let wall_ms = budget.max_wall_ms.get_or_insert(0);
+        *wall_ms = wall_ms.checked_add(requested).ok_or_else(|| {
+            DaemonError::Refused(format!(
+                "session budget replay overflowed pending wall-clock reservation for action {action_id}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn runtime_budget_used_excluding(state: &AdmissionState, excluded_action_id: &str) -> Budget {
+    let mut used = state.session_budget_used.clone();
+    let Some(reserved) = state
+        .pending_runtime_budget_by_action
+        .get(excluded_action_id)
+    else {
+        return used;
+    };
+    if let (Some(used_calls), Some(reserved_calls)) =
+        (&mut used.max_tool_calls, reserved.max_tool_calls)
+    {
+        *used_calls = used_calls.saturating_sub(reserved_calls);
+        if *used_calls == 0 {
+            used.max_tool_calls = None;
+        }
+    }
+    if let (Some(used_wall_ms), Some(reserved_wall_ms)) =
+        (&mut used.max_wall_ms, reserved.max_wall_ms)
+    {
+        *used_wall_ms = used_wall_ms.saturating_sub(reserved_wall_ms);
+        if *used_wall_ms == 0 {
+            used.max_wall_ms = None;
+        }
+    }
+    used
 }
 
 fn payment_reserved_by_mandate_excluding(
