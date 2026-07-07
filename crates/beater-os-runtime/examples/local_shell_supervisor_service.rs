@@ -114,9 +114,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         steps,
     })?;
     if bundle.projection.runnable_pending_actions != 2 {
+        let decisions = bundle
+            .steps
+            .iter()
+            .map(|step| {
+                format!(
+                    "{} decision={:?} explanation={}",
+                    step.action_id, step.decision, step.explanation
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
         return Err(format!(
-            "expected two runnable actions before supervisor run, found {}",
-            bundle.projection.runnable_pending_actions
+            "expected two runnable actions before supervisor run, found {}; pending_allowed={}; decisions=[{}]",
+            bundle.projection.runnable_pending_actions,
+            bundle.projection.pending_allowed_actions,
+            decisions
         )
         .into());
     }
