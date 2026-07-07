@@ -116,6 +116,10 @@ review boundaries.
   - Token-gated HTTP proof that a pre-admitted runnable action dispatches
     through the existing-action path, claims a daemon lease, executes via the
     gateway, completes a receipt, and drains from the runnable queue.
+- `scripts/run-beater-osd-http-worker-loop-smoke.py`
+  - Token-gated HTTP proof that an external runner can drive the bounded
+    runtime local-shell worker loop over multiple admitted actions without
+    receiving direct store authority.
 - `scripts/run-beater-osd-http-claims-smoke.py`
   - Token-gated daemon HTTP scheduler claim/complete smoke covering pinned
     tool compare-and-set refusal, exact lease-id completion, live-lease

@@ -68,6 +68,10 @@ class PlanTest(unittest.TestCase):
                     ("python3", "scripts/run-beater-osd-http-pending-worker-smoke.py", "--json"),
                 ),
                 (
+                    "beater-osd-http-worker-loop-smoke",
+                    ("python3", "scripts/run-beater-osd-http-worker-loop-smoke.py", "--json"),
+                ),
+                (
                     "beater-osd-http-claims-smoke",
                     ("python3", "scripts/run-beater-osd-http-claims-smoke.py", "--json"),
                 ),

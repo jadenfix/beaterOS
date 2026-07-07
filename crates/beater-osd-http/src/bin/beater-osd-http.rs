@@ -28,7 +28,10 @@ use beater_os_core::{
     ExecutionLeaseReconciliation, ExecutionLeaseResolution, GrantConstraints, PolicyDecision,
     ResourceKind, RiskClass, SessionStatus, SideEffectClass, TaintLabel,
 };
-use beater_os_runtime::{AgentRuntime, RuntimeBundle, RuntimeError};
+use beater_os_runtime::{
+    AgentRuntime, RuntimeBundle, RuntimeError, RuntimeLocalShellWorkerLoopRequest,
+    RuntimeLocalShellWorkerRequest,
+};
 use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environment};
 use beater_os_tool_gateway::{
     ClaimedLocalToolInvocation, ExecutionReplayEvidence, GatewayError, LocalToolInvocation,
@@ -89,6 +92,7 @@ const MAX_CONTROL_REQUEST_BYTES: usize = 16 * 1024;
 const MIN_CONTROL_TOKEN_BYTES: usize = 16;
 const DEFAULT_EXECUTE_TIMEOUT_SECS: u64 = 30;
 const MAX_EXECUTE_TIMEOUT_SECS: u64 = 30;
+const MAX_HTTP_WORKER_LOOP_ACTIONS: usize = 16;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -577,6 +581,9 @@ fn handle_authorized_control_request(store: &Store, request: &ControlRequest) ->
         },
         ("POST", "/v1/runtime/bundles") => runtime_bundle_route(store, request),
         ("POST", path) if path.starts_with("/v1/sessions/") => {
+            if let Some(session_id) = parse_runtime_worker_loop_path(path) {
+                return runtime_local_shell_worker_loop_route(store, session_id, request);
+            }
             if let Some((session_id, action_id)) = parse_action_claim_path(path) {
                 return claim_execution_lease_route(store, session_id, action_id, request);
             }
@@ -720,6 +727,15 @@ fn parse_claimable_actions_path(path: &str) -> Option<&str> {
     Some(session_id)
 }
 
+fn parse_runtime_worker_loop_path(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/v1/sessions/")?;
+    let session_id = rest.strip_suffix("/actions/execute-local-shell-loop")?;
+    if session_id.is_empty() || session_id.contains('/') {
+        return None;
+    }
+    Some(session_id)
+}
+
 struct SchedulerProjection {
     pending_allowed_action_ids: Vec<String>,
     runnable_pending_action_ids: Vec<String>,
@@ -819,6 +835,82 @@ fn runtime_bundle_route(store: &Store, request: &ControlRequest) -> (u16, String
         Err(RuntimeError::Daemon(err)) => (500, json_error("store_error", &err.to_string())),
         Err(RuntimeError::Core(err)) => (500, json_error("core_error", &err.to_string())),
         Err(RuntimeError::Gateway(err)) => (500, json_error("gateway_error", &err.to_string())),
+    }
+}
+
+fn runtime_error_response(err: RuntimeError) -> (u16, String) {
+    match err {
+        RuntimeError::Refused(message) => (403, json_error("refused", &message)),
+        RuntimeError::InvalidTtl(ttl) => (
+            400,
+            json_error("bad_request", &format!("invalid ttl seconds: {ttl}")),
+        ),
+        RuntimeError::Daemon(err) => daemon_error_response(err),
+        RuntimeError::Core(err) => (500, json_error("core_error", &err.to_string())),
+        RuntimeError::Gateway(err) => (500, json_error("gateway_error", &err.to_string())),
+    }
+}
+
+fn runtime_local_shell_worker_loop_route(
+    store: &Store,
+    session_id: &str,
+    request: &ControlRequest,
+) -> (u16, String) {
+    if !request.headers.contains_key("content-length") {
+        return (
+            400,
+            json_error("missing_content_length", "POST requires Content-Length"),
+        );
+    }
+    let payload =
+        match serde_json::from_slice::<RuntimeLocalShellWorkerLoopHttpRequest>(&request.body) {
+            Ok(payload) => payload,
+            Err(err) => return (400, json_error("bad_json", &err.to_string())),
+        };
+    if payload.max_actions == 0 || payload.max_actions > MAX_HTTP_WORKER_LOOP_ACTIONS {
+        return (
+            400,
+            json_error(
+                "bad_request",
+                &format!("max_actions must be between 1 and {MAX_HTTP_WORKER_LOOP_ACTIONS}"),
+            ),
+        );
+    }
+    if let Some(timeout_secs) = payload.timeout_secs
+        && (timeout_secs == 0 || timeout_secs > MAX_EXECUTE_TIMEOUT_SECS)
+    {
+        return (
+            400,
+            json_error(
+                "bad_request",
+                &format!("timeout_secs must be between 1 and {MAX_EXECUTE_TIMEOUT_SECS}"),
+            ),
+        );
+    }
+    let runtime = AgentRuntime::from_store(store.clone());
+    let request = RuntimeLocalShellWorkerLoopRequest {
+        max_actions: payload.max_actions,
+        worker: RuntimeLocalShellWorkerRequest {
+            session_id: session_id.to_string(),
+            action_id: payload.action_id,
+            lease_id: None,
+            tool: payload.tool,
+            tool_version: payload.tool_version,
+            tool_digest: payload.tool_digest,
+            command: payload.command,
+            args: payload.args,
+            cwd: payload.cwd,
+            env: payload.env,
+            side_effects: payload.side_effects.into_iter().collect(),
+            risk: payload.risk,
+            receipt_id: None,
+            timeout_secs: payload.timeout_secs,
+            max_output_bytes: payload.max_output_bytes,
+        },
+    };
+    match runtime.run_local_shell_worker_loop(request) {
+        Ok(outcome) => serialize_response(200, &outcome),
+        Err(err) => runtime_error_response(err),
     }
 }
 
@@ -1488,6 +1580,34 @@ struct ExecuteLocalShellRequest {
     timeout_secs: Option<u64>,
     #[serde(default)]
     max_output_bytes: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeLocalShellWorkerLoopHttpRequest {
+    #[serde(default)]
+    action_id: Option<String>,
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
+    tool_version: Option<String>,
+    #[serde(default)]
+    tool_digest: Option<String>,
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    cwd: String,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    #[serde(default)]
+    side_effects: Vec<SideEffectClass>,
+    #[serde(default)]
+    risk: Option<RiskClass>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+    #[serde(default)]
+    max_output_bytes: Option<usize>,
+    max_actions: usize,
 }
 
 #[derive(Debug, Serialize)]
