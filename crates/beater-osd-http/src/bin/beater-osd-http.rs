@@ -31,7 +31,8 @@ use beater_os_core::{
 use beater_os_runtime::{AgentRuntime, RuntimeBundle, RuntimeError};
 use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environment};
 use beater_os_tool_gateway::{
-    GatewayError, LocalToolInvocation, execute_local_tool, local_shell_tool_digest_with_environment,
+    ExecutionReplayEvidence, GatewayError, LocalToolInvocation, execute_local_tool,
+    local_shell_tool_digest_with_environment,
 };
 use beater_osd::{DAEMON_POLICY_VERSION, DaemonError, LocalShellToolRegistration, Store};
 use chrono::{Duration, TimeDelta, Utc};
@@ -833,6 +834,10 @@ fn execute_local_shell_request(
         seq: receipt.seq,
         receipt_hash: receipt.receipt_hash.clone(),
     });
+    let evidence = outcome
+        .evidence
+        .as_ref()
+        .map(ExecutionEvidenceResponse::from);
     Ok(ExecuteLocalShellResponse {
         action_id: outcome.manifest.action_id,
         decision: decision_result_to_string(&outcome.decision.result).to_string(),
@@ -840,6 +845,7 @@ fn execute_local_shell_request(
         resolved,
         execution,
         receipt,
+        evidence,
     })
 }
 
@@ -959,6 +965,7 @@ struct ExecuteLocalShellResponse {
     resolved: String,
     execution: Option<ExecutionResponse>,
     receipt: Option<ReceiptResponse>,
+    evidence: Option<ExecutionEvidenceResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -978,6 +985,47 @@ struct ReceiptResponse {
     receipt_id: String,
     seq: u64,
     receipt_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ExecutionEvidenceResponse {
+    session_id: String,
+    action_id: String,
+    tool_ref: String,
+    manifest_hash: String,
+    proposal_seq: u64,
+    proposal_hash: String,
+    decision_seq: u64,
+    decision_hash: String,
+    admission_journal_root_hash: String,
+    receipt_journal_seq: u64,
+    receipt_journal_hash: String,
+    receipt_seq: u64,
+    receipt_hash: String,
+    receipt_root_hash: String,
+    final_journal_root_hash: String,
+}
+
+impl From<&ExecutionReplayEvidence> for ExecutionEvidenceResponse {
+    fn from(evidence: &ExecutionReplayEvidence) -> Self {
+        Self {
+            session_id: evidence.session_id.clone(),
+            action_id: evidence.action_id.clone(),
+            tool_ref: evidence.tool_ref.clone(),
+            manifest_hash: evidence.manifest_hash.clone(),
+            proposal_seq: evidence.proposal_seq,
+            proposal_hash: evidence.proposal_hash.clone(),
+            decision_seq: evidence.decision_seq,
+            decision_hash: evidence.decision_hash.clone(),
+            admission_journal_root_hash: evidence.admission_journal_root_hash.clone(),
+            receipt_journal_seq: evidence.receipt_journal_seq,
+            receipt_journal_hash: evidence.receipt_journal_hash.clone(),
+            receipt_seq: evidence.receipt_seq,
+            receipt_hash: evidence.receipt_hash.clone(),
+            receipt_root_hash: evidence.receipt_root_hash.clone(),
+            final_journal_root_hash: evidence.final_journal_root_hash.clone(),
+        }
+    }
 }
 
 fn control_response(status: u16, body: String) -> String {

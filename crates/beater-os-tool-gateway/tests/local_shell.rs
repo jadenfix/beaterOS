@@ -257,6 +257,14 @@ fn gateway_executes_registered_local_shell_tool_and_records_receipt() {
     );
     assert!(outcome.execution.is_some());
     let receipt = outcome.receipt.as_ref().expect("receipt");
+    let evidence = outcome.evidence.as_ref().expect("execution evidence");
+    assert_eq!(evidence.action_id, "act-gateway");
+    assert_eq!(evidence.receipt_hash, receipt.receipt_hash);
+    assert_eq!(
+        evidence.final_journal_root_hash,
+        evidence.receipt_journal_hash
+    );
+    assert!(evidence.tool_ref.starts_with("tool:shell@1.0.0#"));
     assert_eq!(receipt.tool_id, "tool:shell");
     assert!(
         receipt
@@ -348,6 +356,7 @@ fn gateway_receipt_records_observed_not_declared_side_effects() {
     .unwrap();
 
     let receipt = outcome.receipt.as_ref().expect("receipt");
+    assert!(outcome.evidence.is_some());
     assert!(receipt.side_effects.is_empty());
     assert!(
         receipt

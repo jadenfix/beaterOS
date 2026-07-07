@@ -334,6 +334,67 @@ fn trace_bundle_verify_expected_root_detects_mismatch() -> Result<(), BeaterOsEr
 }
 
 #[test]
+fn receipt_causality_rejects_semantically_forged_receipt_binding() -> Result<(), BeaterOsError> {
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::SessionCreated {
+            session: session("S1"),
+        },
+        ts(1_000),
+    )?;
+    journal.append(
+        JournalEvent::CapabilityGranted {
+            grant: grant("G1", "S1", "agent:coder"),
+        },
+        ts(1_001),
+    )?;
+    let m = manifest("A1", "S1", "tool:fs", &["G1"]);
+    journal.append(
+        JournalEvent::ActionProposed {
+            manifest: Box::new(m.clone()),
+        },
+        ts(1_002),
+    )?;
+    journal.append(
+        JournalEvent::PolicyDecided {
+            decision: decision("D1", &m, DecisionResult::Allowed, "admitted by grant G1")?,
+        },
+        ts(1_002),
+    )?;
+    let mut ledger = ReceiptLedger::new();
+    let forged_receipt = ledger.append(CapabilityReceiptInput {
+        receipt_id: Some("R1".to_string()),
+        action_id: m.action_id.clone(),
+        tool_id: m.tool_id.clone(),
+        target: m.target.clone(),
+        started_at: ts(1_003),
+        finished_at: ts(1_004),
+        status: "ok".to_string(),
+        input_digest: "digest:forged-input".to_string(),
+        output_digest: "digest:output".to_string(),
+        side_effect_summary: "read completed".to_string(),
+        side_effects: Vec::new(),
+        external_ids: Vec::new(),
+        artifact_refs: Vec::new(),
+        payment_receipt: None,
+    })?;
+    journal.append(
+        JournalEvent::ReceiptAppended {
+            receipt: forged_receipt,
+        },
+        ts(1_004),
+    )?;
+
+    let report = verify_snapshot(&journal.snapshot());
+
+    assert!(!report.ok);
+    let failed: BTreeSet<&str> = report.failures().map(|c| c.check.as_str()).collect();
+    assert!(failed.contains("receipt_causality"));
+    assert!(!failed.contains("cryptographic_chain"));
+    Ok(())
+}
+
+#[test]
 fn metrics_report_full_coverage_for_valid_trace() -> Result<(), BeaterOsError> {
     let snapshot = valid_snapshot()?;
     let metrics = compute_metrics(&snapshot);

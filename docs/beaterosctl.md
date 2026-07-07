@@ -361,7 +361,11 @@ so a token-bearing client cannot use digest computation as an unconstrained
 filesystem read. The HTTP handler never executes a process directly: the gateway
 still derives the manifest, asks `beater-osd::Store` for admission, executes
 only when policy returns `Allowed`, and appends the receipt through the daemon
-store.
+store. Successful execution responses include an `evidence` object that binds
+the admitted manifest hash, proposal and decision journal records, exact
+`tool_id@version#digest`, receipt journal record, receipt root hash, and final
+journal root hash. Denied actions remain receipt-free and do not include
+side-effect execution evidence.
 
 The hosted `beater-os-runtime` crate now exposes a typed runtime bundle for
 future agent workers and service adapters. A bundle can create a session, issue
