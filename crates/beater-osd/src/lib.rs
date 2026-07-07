@@ -819,7 +819,7 @@ impl Store {
         &self,
         session_id: &str,
         input: CapabilityReceiptInput,
-        created_at: DateTime<Utc>,
+        _created_at: DateTime<Utc>,
     ) -> DaemonResult<ReceiptAppendOutcome> {
         self.with_session_lock(session_id, || {
             let projection = self.project_unlocked(session_id)?;
@@ -831,7 +831,7 @@ impl Store {
                 JournalEvent::ReceiptAppended {
                     receipt: receipt.clone(),
                 },
-                created_at,
+                Utc::now(),
             )?;
             Ok(ReceiptAppendOutcome {
                 receipt_record,
