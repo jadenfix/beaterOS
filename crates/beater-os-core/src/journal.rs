@@ -643,6 +643,24 @@ fn verify_event_causality(
                         ),
                     );
                 }
+                if receipt.started_at < lease.leased_at {
+                    return causality_error(
+                        record.seq,
+                        format!(
+                            "receipt {} started before execution lease {} was issued",
+                            receipt.receipt_id, lease.lease_id
+                        ),
+                    );
+                }
+                if receipt.finished_at > lease.expires_at {
+                    return causality_error(
+                        record.seq,
+                        format!(
+                            "receipt {} finished after execution lease {} expired",
+                            receipt.receipt_id, lease.lease_id
+                        ),
+                    );
+                }
             }
             validate_payment_receipt(record.seq, record.created_at, manifest, receipt, state)?;
             state.receipted_actions.insert(receipt.action_id.clone());

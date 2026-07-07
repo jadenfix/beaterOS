@@ -911,7 +911,7 @@ impl Store {
                 JournalEvent::ReceiptAppended {
                     receipt: receipt.clone(),
                 },
-                created_at,
+                Utc::now(),
             )
             .map_err(E::from)?;
         Ok((

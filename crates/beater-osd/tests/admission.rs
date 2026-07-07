@@ -775,6 +775,37 @@ fn open_execution_lease_blocks_reexecution_after_callback_failure() {
 }
 
 #[test]
+fn expired_execution_lease_cannot_be_consumed_by_receipt() {
+    let (_root, store) = create_store_with_session("execute-expired-lease", "sess_expired_lease");
+    let session_id = "sess_expired_lease";
+    append_grant(&store, session_id, grant(session_id));
+    let execute_manifest = manifest(session_id, "act-expired-lease");
+    let admission = store
+        .admit_action(session_id, execute_manifest.clone())
+        .unwrap();
+    let now = Utc::now();
+    let mut lease = execution_lease_for(&execute_manifest, &admission.decision, "lease-expired");
+    lease.leased_at = now;
+    lease.expires_at = now + TimeDelta::milliseconds(1);
+
+    let result = store.execute_and_append_receipt(
+        session_id,
+        lease,
+        Utc::now(),
+        |_projection| -> Result<(CapabilityReceiptInput, ()), DaemonError> {
+            thread::sleep(Duration::from_millis(5));
+            Ok((receipt_input("act-expired-lease"), ()))
+        },
+    );
+
+    assert!(
+        matches!(result, Err(DaemonError::Core(BeaterOsError::Causality { ref message, .. })) if message.contains("finished after execution lease")),
+        "{result:?}"
+    );
+    assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
+}
+
+#[test]
 fn readmission_after_denial_can_use_new_grant_evidence() {
     let (_root, store) = create_store_with_session("admit-readmit", "sess_readmit");
     let session_id = "sess_readmit";
