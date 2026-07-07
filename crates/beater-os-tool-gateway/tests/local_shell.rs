@@ -263,6 +263,9 @@ fn gateway_executes_registered_local_shell_tool_and_records_receipt() {
     let receipt = outcome.receipt.as_ref().expect("receipt");
     let evidence = outcome.evidence.as_ref().expect("execution evidence");
     assert_eq!(evidence.action_id, "act-gateway");
+    assert!(evidence.lease_id.starts_with("lease-"));
+    assert!(evidence.decision_seq < evidence.lease_seq);
+    assert!(evidence.lease_seq < evidence.receipt_journal_seq);
     assert_eq!(evidence.receipt_hash, receipt.receipt_hash);
     assert_eq!(
         evidence.final_journal_root_hash,

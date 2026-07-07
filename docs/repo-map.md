@@ -15,6 +15,8 @@ review boundaries.
 - `crates/beater-osd`
   - Runtime daemon store, admission boundary, projection, receipt append path.
   - Durable session budget replay for tool-call and wall-clock runtime quotas.
+  - Durable execution leases between `Allowed` policy decisions and spawned
+    side-effecting tools; open leases block blind replay after crash windows.
   - Local loopback control-plane API for health and token-gated session
     projection.
   - Canonical proof of authority writes (`PolicyEngine` is only invocation point
@@ -37,7 +39,8 @@ review boundaries.
   - Tool schema registry, tool risk metadata, and execution manifest binding.
 - `crates/beater-os-tool-gateway`
   - Registered-tool resolution, kernel-derived manifest construction, daemon
-    admission, sandbox execution, and receipt append for local shell tools.
+    admission, durable execution lease acquisition, sandbox execution, and
+    receipt append for local shell tools.
 - `crates/beater-os-runtime`
   - Typed agent runtime loop over the daemon store: session bootstrap, bounded
     grant issuance, sequential step admission, and no-side-effect observation

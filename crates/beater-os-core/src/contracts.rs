@@ -569,6 +569,24 @@ impl ActionManifest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionLease {
+    pub lease_id: String,
+    pub session_id: String,
+    pub action_id: String,
+    pub manifest_hash: HashValue,
+    pub decision_id: String,
+    pub tool_id: String,
+    pub tool_ref: String,
+    pub target: CapabilitySelector,
+    #[serde(default)]
+    pub required_grants: BTreeSet<String>,
+    #[serde(default)]
+    pub requested_budget: Budget,
+    pub leased_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentIntent {
     pub mandate_id: String,
     pub rail: String,

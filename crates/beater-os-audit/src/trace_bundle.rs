@@ -282,6 +282,7 @@ fn project_trace_from_journal(records: &[JournalRecord]) -> Result<ProjectedTrac
                 projected.manifests.push((**manifest).clone());
             }
             JournalEvent::PolicyDecided { decision } => projected.decisions.push(decision.clone()),
+            JournalEvent::ExecutionLeaseIssued { .. } => {}
             JournalEvent::ApprovalRecorded { approval } => {
                 projected.approvals.push(approval.clone());
             }

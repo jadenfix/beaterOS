@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 
 use beater_os_core::{
     ActionKind, ActionManifest, Budget, CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput,
-    CapabilitySelector, DataClass, DecisionResult, HashValue, PolicyDecision, ResourceKind,
-    RiskClass, SideEffectClass, TaintLabel,
+    CapabilitySelector, DataClass, DecisionResult, ExecutionLease, HashValue, PolicyDecision,
+    ResourceKind, RiskClass, SideEffectClass, TaintLabel,
 };
 use beater_os_sandbox::{
     SandboxLimits, SandboxOutcome, SandboxRequest, SandboxStatus, execute as sandbox_execute,
@@ -28,7 +28,7 @@ use beater_os_sandbox::{
 };
 use beater_os_tool_registry::{ResolveRequest, ToolRegistry};
 use beater_osd::{AdmissionOutcome, DaemonError, Store};
-use chrono::Utc;
+use chrono::{TimeDelta, Utc};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -188,6 +188,9 @@ pub struct ExecutionReplayEvidence {
     pub decision_seq: u64,
     pub decision_hash: HashValue,
     pub admission_journal_root_hash: HashValue,
+    pub lease_id: String,
+    pub lease_seq: u64,
+    pub lease_hash: HashValue,
     pub receipt_journal_seq: u64,
     pub receipt_journal_hash: HashValue,
     pub receipt_seq: u64,
@@ -347,8 +350,34 @@ pub fn execute_local_tool(
         .unwrap_or(&manifest.target)
         .resource_id
         .clone();
-    let (receipt_outcome, execution) =
-        store.execute_and_append_receipt(&invocation.session_id, Utc::now(), |projection| {
+    let lease_started_at = Utc::now();
+    let lease_expires_at = lease_started_at
+        .checked_add_signed(TimeDelta::milliseconds(
+            i64::try_from(requested_wall_ms).map_err(|_| GatewayError::RuntimeBudgetOverflow)?,
+        ))
+        .ok_or(GatewayError::RuntimeBudgetOverflow)?;
+    let execution_lease = ExecutionLease {
+        lease_id: format!("lease-{}", decision.decision_id),
+        session_id: manifest.session_id.clone(),
+        action_id: manifest.action_id.clone(),
+        manifest_hash: decision.manifest_hash.clone(),
+        decision_id: decision.decision_id.clone(),
+        tool_id: manifest.tool_id.clone(),
+        tool_ref: tool_ref.clone(),
+        target: manifest
+            .resolved_target
+            .clone()
+            .unwrap_or_else(|| manifest.target.clone()),
+        required_grants: manifest.required_grants.clone(),
+        requested_budget: manifest.requested_budget.clone(),
+        leased_at: lease_started_at,
+        expires_at: lease_expires_at,
+    };
+    let (lease_outcome, receipt_outcome, execution) = store.execute_and_append_receipt(
+        &invocation.session_id,
+        execution_lease,
+        Utc::now(),
+        |projection| {
             let active_grants = projection.active_grants(Utc::now());
             let active_grant_ids: BTreeSet<&str> = active_grants
                 .iter()
@@ -381,6 +410,7 @@ pub fn execute_local_tool(
                     actual: actual_target,
                 });
             }
+            let started_at = Utc::now();
             let execution = sandbox_execute(&SandboxRequest {
                 command,
                 args,
@@ -423,7 +453,7 @@ pub fn execute_local_tool(
                             resource_kind: ResourceKind::FilePath,
                             resource_id: execution.resolved_target.display().to_string(),
                         }),
-                    started_at: now,
+                    started_at,
                     finished_at: Utc::now(),
                     status: execution.status_str().to_string(),
                     input_digest: receipt_input_digest,
@@ -436,7 +466,8 @@ pub fn execute_local_tool(
                 },
                 execution,
             ))
-        })?;
+        },
+    )?;
     let evidence = ExecutionReplayEvidence {
         session_id: manifest.session_id.clone(),
         action_id: manifest.action_id.clone(),
@@ -447,6 +478,9 @@ pub fn execute_local_tool(
         decision_seq: admission.decision_record.seq,
         decision_hash: admission.decision_record.hash.clone(),
         admission_journal_root_hash: admission.decision_record.hash.clone(),
+        lease_id: lease_outcome.lease.lease_id,
+        lease_seq: lease_outcome.lease_record.seq,
+        lease_hash: lease_outcome.lease_record.hash.clone(),
         receipt_journal_seq: receipt_outcome.receipt_record.seq,
         receipt_journal_hash: receipt_outcome.receipt_record.hash.clone(),
         receipt_seq: receipt_outcome.receipt.seq,

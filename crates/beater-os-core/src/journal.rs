@@ -4,9 +4,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
-    ActionManifest, AgentSession, ApprovalEvidence, CapabilityGrant, DecisionResult, MemoryRecord,
-    PaymentIntent, PaymentMandate, PolicyDecision, ScenarioManifest, SessionStatus,
-    SideEffectClass, SimulationEvidence,
+    ActionManifest, AgentSession, ApprovalEvidence, CapabilityGrant, DecisionResult,
+    ExecutionLease, MemoryRecord, PaymentIntent, PaymentMandate, PolicyDecision, ScenarioManifest,
+    SessionStatus, SideEffectClass, SimulationEvidence,
 };
 use crate::error::{BeaterOsError, BeaterOsResult};
 use crate::hash::{GENESIS_HASH, HashValue, hash_json};
@@ -43,6 +43,9 @@ pub enum JournalEvent {
     },
     PolicyDecided {
         decision: PolicyDecision,
+    },
+    ExecutionLeaseIssued {
+        lease: ExecutionLease,
     },
     ApprovalRecorded {
         approval: ApprovalEvidence,
@@ -208,7 +211,10 @@ struct CausalityState {
     issued_grants: BTreeMap<String, CapabilityGrant>,
     issued_mandates: BTreeMap<String, PaymentMandate>,
     allowed_decisions: BTreeMap<String, HashValue>,
+    allowed_decision_ids: BTreeMap<String, String>,
     latest_decision_by_action: BTreeMap<String, DecisionResult>,
+    open_execution_leases: BTreeMap<String, ExecutionLease>,
+    receipted_actions: BTreeSet<String>,
     review_ids: BTreeMap<String, ()>,
     simulation_ids: BTreeMap<String, ()>,
     receipt_chain: Vec<CapabilityReceipt>,
@@ -407,8 +413,28 @@ fn verify_event_causality(
                 state
                     .allowed_decisions
                     .insert(decision.action_id.clone(), decision.manifest_hash.clone());
+                state
+                    .allowed_decision_ids
+                    .insert(decision.action_id.clone(), decision.decision_id.clone());
             } else {
                 state.allowed_decisions.remove(&decision.action_id);
+                state.allowed_decision_ids.remove(&decision.action_id);
+            }
+        }
+        JournalEvent::ExecutionLeaseIssued { lease } => {
+            validate_execution_lease(record, lease, state)?;
+            if state
+                .open_execution_leases
+                .insert(lease.action_id.clone(), lease.clone())
+                .is_some()
+            {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "action {} already has an open execution lease",
+                        lease.action_id
+                    ),
+                );
             }
         }
         JournalEvent::ApprovalRecorded { approval } => {
@@ -598,7 +624,28 @@ fn verify_event_causality(
                     ),
                 );
             }
+            if let Some(lease) = state.open_execution_leases.remove(&receipt.action_id) {
+                if lease.tool_id != receipt.tool_id {
+                    return causality_error(
+                        record.seq,
+                        format!(
+                            "receipt {} tool {} does not match execution lease {} tool {}",
+                            receipt.receipt_id, receipt.tool_id, lease.lease_id, lease.tool_id
+                        ),
+                    );
+                }
+                if lease.target != receipt.target {
+                    return causality_error(
+                        record.seq,
+                        format!(
+                            "receipt {} target does not match execution lease {} target",
+                            receipt.receipt_id, lease.lease_id
+                        ),
+                    );
+                }
+            }
             validate_payment_receipt(record.seq, record.created_at, manifest, receipt, state)?;
+            state.receipted_actions.insert(receipt.action_id.clone());
             state.receipt_chain.push(receipt.clone());
             ReceiptLedger::from_receipts(state.receipt_chain.clone()).verify_chain()?;
         }
@@ -633,6 +680,189 @@ fn verify_event_causality(
             record.seq,
             format!("journal event id {event_id} was recorded more than once"),
         );
+    }
+    Ok(())
+}
+
+fn validate_execution_lease(
+    record: &JournalRecord,
+    lease: &ExecutionLease,
+    state: &CausalityState,
+) -> BeaterOsResult<()> {
+    for (field, value) in [
+        ("lease_id", lease.lease_id.as_str()),
+        ("session_id", lease.session_id.as_str()),
+        ("action_id", lease.action_id.as_str()),
+        ("manifest_hash", lease.manifest_hash.as_str()),
+        ("decision_id", lease.decision_id.as_str()),
+        ("tool_id", lease.tool_id.as_str()),
+        ("tool_ref", lease.tool_ref.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return causality_error(
+                record.seq,
+                format!("execution lease {} has empty {field}", lease.lease_id),
+            );
+        }
+    }
+    match state.session_statuses.get(&lease.session_id) {
+        Some(SessionStatus::Running) => {}
+        Some(status) => {
+            return causality_error(
+                record.seq,
+                format!(
+                    "execution lease {} was issued while session {} was {status:?}",
+                    lease.lease_id, lease.session_id
+                ),
+            );
+        }
+        None => {
+            return causality_error(
+                record.seq,
+                format!(
+                    "execution lease {} references missing session {}",
+                    lease.lease_id, lease.session_id
+                ),
+            );
+        }
+    }
+    let Some(manifest) = state.proposed_actions.get(&lease.action_id) else {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease {} references action {} before it was proposed",
+                lease.lease_id, lease.action_id
+            ),
+        );
+    };
+    if manifest.session_id != lease.session_id {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease {} session {} does not match action {} session {}",
+                lease.lease_id, lease.session_id, manifest.action_id, manifest.session_id
+            ),
+        );
+    }
+    if manifest.digest()? != lease.manifest_hash {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease {} manifest hash does not match action {}",
+                lease.lease_id, manifest.action_id
+            ),
+        );
+    }
+    if state.latest_decision_by_action.get(&lease.action_id) != Some(&DecisionResult::Allowed) {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease {} references action {} without a latest Allowed decision",
+                lease.lease_id, lease.action_id
+            ),
+        );
+    }
+    if state.receipted_actions.contains(&lease.action_id) {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease {} references already-receipted action {}",
+                lease.lease_id, lease.action_id
+            ),
+        );
+    }
+    if state.allowed_decision_ids.get(&lease.action_id) != Some(&lease.decision_id) {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease {} decision id is not the latest allowed decision for action {}",
+                lease.lease_id, lease.action_id
+            ),
+        );
+    }
+    if lease.tool_id != manifest.tool_id {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease {} tool {} does not match action {} tool {}",
+                lease.lease_id, lease.tool_id, manifest.action_id, manifest.tool_id
+            ),
+        );
+    }
+    let expected_target = manifest
+        .resolved_target
+        .as_ref()
+        .unwrap_or(&manifest.target);
+    if &lease.target != expected_target {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease {} target does not match action {} target",
+                lease.lease_id, manifest.action_id
+            ),
+        );
+    }
+    if lease.required_grants != manifest.required_grants {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease {} required grants do not match action {}",
+                lease.lease_id, manifest.action_id
+            ),
+        );
+    }
+    if lease.requested_budget != manifest.requested_budget {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease {} requested budget does not match action {}",
+                lease.lease_id, manifest.action_id
+            ),
+        );
+    }
+    if lease.leased_at > record.created_at {
+        return causality_error(
+            record.seq,
+            format!("execution lease {} is future-dated", lease.lease_id),
+        );
+    }
+    if lease.expires_at <= record.created_at {
+        return causality_error(
+            record.seq,
+            format!(
+                "execution lease {} expires before it can execute",
+                lease.lease_id
+            ),
+        );
+    }
+    for required in &manifest.required_grants {
+        let Some(grant) = state.issued_grants.get(required) else {
+            return causality_error(
+                record.seq,
+                format!(
+                    "execution lease {} references missing grant {}",
+                    lease.lease_id, required
+                ),
+            );
+        };
+        if grant.revoked || state.revoked_handles.contains(&grant.revocation_handle) {
+            return causality_error(
+                record.seq,
+                format!(
+                    "execution lease {} references revoked grant {}",
+                    lease.lease_id, required
+                ),
+            );
+        }
+        if grant.expires_at <= record.created_at {
+            return causality_error(
+                record.seq,
+                format!(
+                    "execution lease {} references expired grant {}",
+                    lease.lease_id, required
+                ),
+            );
+        }
     }
     Ok(())
 }
@@ -966,6 +1196,7 @@ fn primary_event_id(record: &JournalRecord) -> Option<&str> {
         JournalEvent::PaymentMandateIssued { mandate } => Some(mandate.mandate_id.as_str()),
         JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
         JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
+        JournalEvent::ExecutionLeaseIssued { lease } => Some(lease.lease_id.as_str()),
         JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
         JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
         JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),
