@@ -100,6 +100,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut grant = GrantRequest::new(ResourceKind::FilePath, "*", [ActionKind::Execute]);
     grant.constraints = GrantConstraints {
+        max_risk: Some(RiskClass::High),
         path_prefixes: BTreeSet::from([cwd.clone()]),
         ..Default::default()
     };
