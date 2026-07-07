@@ -31,8 +31,8 @@ use beater_os_core::{
 use beater_os_runtime::{AgentRuntime, RuntimeBundle, RuntimeError};
 use beater_os_sandbox::{SandboxLimits, safe_path_environment, validate_environment};
 use beater_os_tool_gateway::{
-    ExecutionReplayEvidence, GatewayError, LocalToolInvocation, execute_local_tool,
-    local_shell_tool_digest_with_environment,
+    ClaimedLocalToolInvocation, ExecutionReplayEvidence, GatewayError, LocalToolInvocation,
+    execute_claimed_local_tool, execute_local_tool, local_shell_tool_digest_with_environment,
 };
 use beater_osd::{
     DAEMON_POLICY_VERSION, DaemonError, ExecutionLeaseClaimRequest, LocalShellToolRegistration,
@@ -597,6 +597,19 @@ fn handle_authorized_control_request(store: &Store, request: &ControlRequest) ->
             (404, json_error("not_found", "unknown control-plane route"))
         }
         ("GET", path) if path.starts_with("/v1/sessions/") => {
+            if let Some(session_id) = parse_claimable_actions_path(path) {
+                return match store.claimable_execution_actions(session_id) {
+                    Ok(actions) => (
+                        200,
+                        serde_json::json!({ "claimable_actions": actions }).to_string(),
+                    ),
+                    Err(DaemonError::SessionNotFound(_)) => (
+                        404,
+                        json_error("session_not_found", "session does not exist"),
+                    ),
+                    Err(err) => daemon_error_response(err),
+                };
+            }
             let session_id = path.trim_start_matches("/v1/sessions/");
             if session_id.contains('/') {
                 return (404, json_error("not_found", "unknown control-plane route"));
@@ -674,6 +687,15 @@ fn parse_action_complete_path(path: &str) -> Option<(&str, &str, &str)> {
         return None;
     }
     Some((session_id, action_id, lease_id))
+}
+
+fn parse_claimable_actions_path(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/v1/sessions/")?;
+    let session_id = rest.strip_suffix("/actions/claimable")?;
+    if session_id.is_empty() || session_id.contains('/') {
+        return None;
+    }
+    Some(session_id)
 }
 
 struct SchedulerProjection {
@@ -957,7 +979,8 @@ fn execute_local_shell_request(
     let action_id = payload
         .action_id
         .unwrap_or_else(|| format!("daemon-exec-{}", Utc::now().timestamp_millis()));
-    let dispatch_mode = if projection.manifest(&action_id).is_some() {
+    let existing_action = projection.manifest(&action_id).is_some();
+    let dispatch_mode = if existing_action {
         ensure_existing_action_runnable(&projection, &action_id)?;
         "runnable_pending_action"
     } else {
@@ -1029,6 +1052,21 @@ fn execute_local_shell_request(
     let expected_tool_digest = payload
         .tool_digest
         .unwrap_or_else(|| computed_digest.clone());
+    if existing_action && expected_tool_digest != computed_digest {
+        return Err(ControlExecutionError::Gateway(
+            GatewayError::ToolDigestMismatch,
+        ));
+    }
+    if existing_action
+        && let Some(manifest) = projection.manifest(&action_id)
+        && manifest.inputs_digest != computed_digest
+    {
+        return Err(ControlExecutionError::Gateway(
+            GatewayError::ClaimedActionInputDigestMismatch {
+                action_id: action_id.clone(),
+            },
+        ));
+    }
     let tool_version = payload.tool_version.unwrap_or_else(|| {
         let prefix_len = expected_tool_digest.len().min(16);
         format!("local-{}", &expected_tool_digest[..prefix_len])
@@ -1041,6 +1079,64 @@ fn execute_local_shell_request(
         side_effects: expected_side_effects.clone(),
         risk_class,
     })?;
+    if existing_action {
+        let decision = projection.latest_decision(&action_id).ok_or_else(|| {
+            ControlExecutionError::Refused(format!(
+                "action {action_id} was proposed but has no policy decision"
+            ))
+        })?;
+        let claim = store.claim_execution_lease_from_admission(
+            session_id,
+            ExecutionLeaseClaimRequest {
+                lease_id: format!("lease-{}", decision.decision_id),
+                action_id: action_id.clone(),
+                expected_manifest_hash: decision.manifest_hash.clone(),
+                expected_decision_id: decision.decision_id.clone(),
+                expected_tool_version: tool_version,
+                expected_tool_digest,
+            },
+            Utc::now(),
+        )?;
+        let outcome = execute_claimed_local_tool(
+            store,
+            &registry,
+            session_id,
+            &claim.lease.lease_id,
+            ClaimedLocalToolInvocation {
+                command,
+                args: command_args,
+                cwd,
+                environment,
+                receipt_id: payload.receipt_id,
+                limits,
+            },
+        )?;
+        let execution = ExecutionResponse {
+            status: outcome.execution.status_str().to_string(),
+            exit_code: outcome.execution.exit_code,
+            stdout_digest: outcome.execution.stdout_digest(),
+            stdout_truncated: outcome.execution.stdout_truncated,
+            stderr_truncated: outcome.execution.stderr_truncated,
+            created: outcome.execution.diff.created.clone(),
+            modified: outcome.execution.diff.modified.clone(),
+            deleted: outcome.execution.diff.deleted.clone(),
+        };
+        let receipt = ReceiptResponse {
+            receipt_id: outcome.receipt.receipt_id,
+            seq: outcome.receipt.seq,
+            receipt_hash: outcome.receipt.receipt_hash,
+        };
+        return Ok(ExecuteLocalShellResponse {
+            action_id,
+            dispatch: dispatch_mode.to_string(),
+            decision: decision_result_to_string(&decision.result).to_string(),
+            explanation: decision.explanation.clone(),
+            resolved: claim.lease.target.resource_id,
+            execution: Some(execution),
+            receipt: Some(receipt),
+            evidence: None,
+        });
+    }
     let outcome = execute_local_tool(
         store,
         &registry,

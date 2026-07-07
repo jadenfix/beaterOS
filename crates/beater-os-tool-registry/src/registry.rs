@@ -362,6 +362,15 @@ impl ToolRegistry {
         self.workspace_allowlists.contains_key(workspace_id)
     }
 
+    /// Return the exact version+digest pin for a tool, if one exists.
+    ///
+    /// Runtime scheduler surfaces use this to publish compare-and-set inputs
+    /// for execution-lease claims without exposing registry internals or asking
+    /// workers to guess which version is authoritative.
+    pub fn pin_for(&self, tool_id: &str) -> Option<&ToolPin> {
+        self.pins.get(tool_id)
+    }
+
     /// Look up a registered tool without applying resolution policy.
     pub fn get(&self, tool_id: &str, version: &str) -> RegistryResult<&RegisteredTool> {
         self.tools

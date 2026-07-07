@@ -33,6 +33,7 @@ use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, ResolveRequest, TestStatus, ToolRegistry, ToolTrust,
 };
 use chrono::{DateTime, TimeDelta, Utc};
+use serde::Serialize;
 
 pub use crate::error::{DaemonError, DaemonResult};
 
@@ -249,6 +250,23 @@ pub struct ExecutionLeaseClaimRequest {
     pub expected_decision_id: String,
     pub expected_tool_version: String,
     pub expected_tool_digest: HashValue,
+}
+
+/// Store-owned projection of an admitted execute action that is currently
+/// claimable by a scheduler worker.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClaimableExecutionAction {
+    pub session_id: String,
+    pub action_id: String,
+    pub manifest: ActionManifest,
+    pub manifest_hash: HashValue,
+    pub decision_id: String,
+    pub tool_id: String,
+    pub expected_tool_version: String,
+    pub expected_tool_digest: HashValue,
+    pub target: beater_os_core::CapabilitySelector,
+    pub required_grants: BTreeSet<String>,
+    pub requested_budget: Budget,
 }
 
 /// Durable lifecycle transition applied by the daemon store.
@@ -1149,6 +1167,90 @@ impl Store {
         })
     }
 
+    /// Return execute actions that can be claimed without re-deriving authority
+    /// in an HTTP or worker adapter.
+    ///
+    /// The projection is intentionally store-owned: it is computed under the
+    /// same session lock and registry resolution rules as
+    /// [`Self::claim_execution_lease_from_admission`]. Entries are included only
+    /// when the latest decision is allowed, the action is unreceipted,
+    /// unreconciled, not already leased, has a finite wall budget, and resolves
+    /// to the daemon registry's current pinned tool version/digest.
+    pub fn claimable_execution_actions(
+        &self,
+        session_id: &str,
+    ) -> DaemonResult<Vec<ClaimableExecutionAction>> {
+        self.with_session_lock(session_id, || {
+            let journal = self.load_journal_unlocked(session_id)?;
+            let projection = project_journal(session_id, &journal)?;
+            ensure_session_running(&projection.session)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            if !admission_state.open_execution_leases.is_empty() {
+                return Ok(Vec::new());
+            }
+            let registry = self.load_tool_registry_unlocked()?;
+            let mut actions = Vec::new();
+            for manifest in projection.manifests {
+                if manifest.action_kind != ActionKind::Execute {
+                    continue;
+                }
+                if admission_state
+                    .receipted_actions
+                    .contains(&manifest.action_id)
+                    || admission_state
+                        .reconciled_execution_actions
+                        .contains_key(&manifest.action_id)
+                    || admission_state
+                        .open_execution_leases
+                        .contains_key(&manifest.action_id)
+                    || manifest.requested_budget.max_wall_ms.is_none()
+                {
+                    continue;
+                }
+                let Some(decision) = admission_state.latest_decisions.get(&manifest.action_id)
+                else {
+                    continue;
+                };
+                if decision.result != DecisionResult::Allowed {
+                    continue;
+                }
+                let manifest_hash = manifest.digest().map_err(DaemonError::from)?;
+                if manifest_hash != decision.manifest_hash {
+                    return Err(DaemonError::Refused(format!(
+                        "action {} manifest hash no longer matches latest decision {}",
+                        manifest.action_id, decision.decision_id
+                    )));
+                }
+                let Some(pin) = registry.pin_for(&manifest.tool_id) else {
+                    continue;
+                };
+                let registered_tool = registry.resolve(
+                    &ResolveRequest::new(manifest.tool_id.clone(), pin.version.clone())
+                        .in_workspace(projection.session.workspace_id.clone())
+                        .expecting_digest(pin.content_digest.clone()),
+                )?;
+                let target = manifest
+                    .resolved_target
+                    .clone()
+                    .unwrap_or_else(|| manifest.target.clone());
+                actions.push(ClaimableExecutionAction {
+                    session_id: session_id.to_string(),
+                    action_id: manifest.action_id.clone(),
+                    manifest: manifest.clone(),
+                    manifest_hash,
+                    decision_id: decision.decision_id.clone(),
+                    tool_id: manifest.tool_id.clone(),
+                    expected_tool_version: registered_tool.manifest.version.clone(),
+                    expected_tool_digest: registered_tool.content_digest.clone(),
+                    target,
+                    required_grants: manifest.required_grants.clone(),
+                    requested_budget: manifest.requested_budget.clone(),
+                });
+            }
+            Ok(actions)
+        })
+    }
+
     /// Complete a previously claimed execution lease with a receipt. The lease
     /// must still be open and match `lease_id`; core journal causality verifies
     /// timing, target, tool, input digest, side-effect, and receipt-chain
@@ -1192,6 +1294,70 @@ impl Store {
                 receipt,
             })
         })
+    }
+
+    /// Run a lease-bound execution callback while holding the session lock,
+    /// then append the callback's receipt to complete the already-open lease.
+    ///
+    /// This is the split worker counterpart to
+    /// [`Self::execute_and_append_receipt`]: the lease has already been claimed,
+    /// but grants, lifecycle state, open-lease identity, and receipt causality
+    /// are still rechecked under the daemon lock immediately before the tool
+    /// enters the sandbox.
+    pub fn execute_open_lease_and_append_receipt<T, E>(
+        &self,
+        session_id: &str,
+        lease_id: &str,
+        execute: impl FnOnce(
+            &SessionProjection,
+            &ExecutionLease,
+        ) -> Result<(CapabilityReceiptInput, T), E>,
+    ) -> Result<(ReceiptAppendOutcome, T), E>
+    where
+        E: From<DaemonError>,
+    {
+        let _lock = self.acquire_session_lock(session_id).map_err(E::from)?;
+        let journal = self.load_journal_unlocked(session_id).map_err(E::from)?;
+        let projection = project_journal(session_id, &journal).map_err(E::from)?;
+        ensure_session_running(&projection.session).map_err(E::from)?;
+        let admission_state =
+            admission_state_from_journal(session_id, &journal).map_err(E::from)?;
+        let open_lease = admission_state
+            .open_execution_leases
+            .values()
+            .find(|lease| lease.lease_id == lease_id)
+            .ok_or_else(|| DaemonError::Refused(format!("execution lease {lease_id} is not open")))
+            .map_err(E::from)?;
+        let (input, outcome) = execute(&projection, open_lease)?;
+        if input.action_id != open_lease.action_id {
+            return Err(E::from(DaemonError::Refused(format!(
+                "receipt for action {} does not match execution lease {} action {}",
+                input.action_id, lease_id, open_lease.action_id
+            ))));
+        }
+        let mut ledger = self
+            .receipt_ledger_from_journal_unlocked(session_id)
+            .map_err(E::from)?;
+        let receipt = ledger
+            .append(input)
+            .map_err(DaemonError::from)
+            .map_err(E::from)?;
+        let receipt_record = self
+            .append_event_unlocked(
+                session_id,
+                JournalEvent::ReceiptAppended {
+                    receipt: receipt.clone(),
+                },
+                Utc::now(),
+            )
+            .map_err(E::from)?;
+        Ok((
+            ReceiptAppendOutcome {
+                receipt_record,
+                receipt,
+            },
+            outcome,
+        ))
     }
 
     /// Append a durable execution lease, run one execution callback while
