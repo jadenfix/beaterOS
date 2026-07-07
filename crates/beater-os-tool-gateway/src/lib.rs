@@ -242,12 +242,13 @@ pub fn execute_local_tool(
     ) {
         return Err(GatewayError::MissingToolCapability);
     }
-    let confinement_prefixes = confinement_prefixes(&active_grants, &invocation.required_grants);
-    if confinement_prefixes.is_empty() {
+    let initial_confinement_prefixes =
+        confinement_prefixes(&active_grants, &invocation.required_grants);
+    if initial_confinement_prefixes.is_empty() {
         return Err(GatewayError::MissingConfinement);
     }
 
-    let resolved = resolve_confined(&invocation.cwd, &confinement_prefixes)?;
+    let resolved = resolve_confined(&invocation.cwd, &initial_confinement_prefixes)?;
     let resolved_target = resolved.display().to_string();
     let mut inputs_summary = if invocation.args.is_empty() {
         invocation.command.clone()
