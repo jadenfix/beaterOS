@@ -22,11 +22,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use beater_os_core::{
-    ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, CapabilityGrant,
-    CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult, DelegationMode,
-    HashValue, InMemoryJournal, JournalEvent, JournalRecord, JournalSnapshot, PaymentMandate,
-    PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind, RiskClass, SessionStatus,
-    SideEffectClass, SimulationEvidence, ToolManifest,
+    ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, Budget,
+    CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult,
+    DelegationMode, HashValue, InMemoryJournal, JournalEvent, JournalRecord, JournalSnapshot,
+    PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind, RiskClass,
+    SessionStatus, SideEffectClass, SimulationEvidence, ToolManifest,
 };
 use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
@@ -730,6 +730,8 @@ impl Store {
                 &admission_state,
                 manifest.action_id.as_str(),
             );
+            let session_budget_used =
+                runtime_budget_used_excluding(&admission_state, manifest.action_id.as_str());
             let mut revoked_handles = admission_state.revoked_handles;
             revoked_handles.extend(external_revoked_handles);
             let ctx = AdmissionContext {
@@ -737,6 +739,8 @@ impl Store {
                 actor_id: admission_state.session.agent_id,
                 session_id: admission_state.session.session_id,
                 policy_version: DAEMON_POLICY_VERSION.to_string(),
+                session_budget: admission_state.session.budget,
+                session_budget_used,
                 grants: admission_state.grants.into_values().collect(),
                 approvals: admission_state.approvals,
                 simulations: admission_state.simulations,
@@ -1245,6 +1249,8 @@ struct AdmissionState {
     event_ids: BTreeSet<String>,
     mandates: BTreeMap<String, PaymentMandate>,
     payment_reserved_by_mandate: BTreeMap<String, u64>,
+    session_budget_used: Budget,
+    pending_runtime_budget_by_action: BTreeMap<String, Budget>,
     proposals: BTreeMap<String, ProposedAction>,
     latest_decisions: BTreeMap<String, PolicyDecision>,
     approvals: Vec<ApprovalEvidence>,
@@ -1267,6 +1273,8 @@ fn admission_state_from_journal(
     let mut event_ids = BTreeSet::new();
     let mut mandates = BTreeMap::new();
     let mut payment_reserved_by_mandate = BTreeMap::new();
+    let mut session_budget_used = Budget::default();
+    let mut receipted_actions = BTreeSet::new();
     let mut proposals = BTreeMap::new();
     let mut latest_decisions = BTreeMap::new();
     let mut approvals = Vec::new();
@@ -1347,8 +1355,11 @@ fn admission_state_from_journal(
             }
             JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
             JournalEvent::SimulationRecorded { simulation } => simulations.push(simulation.clone()),
-            JournalEvent::ReceiptAppended { .. }
-            | JournalEvent::MemoryWritten { .. }
+            JournalEvent::ReceiptAppended { receipt } => {
+                receipted_actions.insert(receipt.action_id.clone());
+                debit_receipt_budget(&mut session_budget_used, receipt)?;
+            }
+            JournalEvent::MemoryWritten { .. }
             | JournalEvent::ScenarioEvaluated { .. }
             | JournalEvent::IncidentAnnotated { .. } => {}
         }
@@ -1390,6 +1401,27 @@ fn admission_state_from_journal(
                 ))
             })?;
     }
+    let mut pending_runtime_budget_by_action = BTreeMap::new();
+    for (action_id, decision) in &latest_decisions {
+        if !reserves_runtime_budget(decision.result.clone())
+            || receipted_actions.contains(action_id)
+        {
+            continue;
+        }
+        let Some(proposal) = proposals.get(action_id) else {
+            return Err(DaemonError::Refused(format!(
+                "runtime-budget-reserving policy decision for action {action_id} has no proposed manifest"
+            )));
+        };
+        let mut reserved = Budget::default();
+        debit_manifest_budget(&mut reserved, &proposal.manifest)?;
+        debit_budget(
+            &mut session_budget_used,
+            &reserved,
+            &proposal.manifest.action_id,
+        )?;
+        pending_runtime_budget_by_action.insert(action_id.clone(), reserved);
+    }
 
     Ok(AdmissionState {
         session,
@@ -1399,6 +1431,8 @@ fn admission_state_from_journal(
         event_ids,
         mandates,
         payment_reserved_by_mandate,
+        session_budget_used,
+        pending_runtime_budget_by_action,
         proposals,
         latest_decisions,
         approvals,
@@ -1413,6 +1447,116 @@ fn reserves_payment_capacity(result: beater_os_core::DecisionResult) -> bool {
             | beater_os_core::DecisionResult::NeedsApproval
             | beater_os_core::DecisionResult::NeedsSimulation
     )
+}
+
+fn debit_receipt_budget(budget: &mut Budget, receipt: &CapabilityReceipt) -> DaemonResult<()> {
+    let tool_calls = budget.max_tool_calls.get_or_insert(0);
+    *tool_calls = tool_calls.checked_add(1).ok_or_else(|| {
+        DaemonError::Refused(
+            "session budget replay overflowed committed tool-call usage".to_string(),
+        )
+    })?;
+
+    let elapsed = receipt
+        .finished_at
+        .signed_duration_since(receipt.started_at);
+    if elapsed.num_milliseconds() < 0 {
+        return Err(DaemonError::Refused(format!(
+            "receipt {} finished before it started",
+            receipt.receipt_id
+        )));
+    }
+    let elapsed_ms = u64::try_from(elapsed.num_milliseconds()).map_err(|_| {
+        DaemonError::Refused(format!(
+            "receipt {} wall-clock duration could not fit u64 milliseconds",
+            receipt.receipt_id
+        ))
+    })?;
+    let wall_ms = budget.max_wall_ms.get_or_insert(0);
+    *wall_ms = wall_ms.checked_add(elapsed_ms).ok_or_else(|| {
+        DaemonError::Refused(
+            "session budget replay overflowed committed wall-clock usage".to_string(),
+        )
+    })?;
+    Ok(())
+}
+
+fn reserves_runtime_budget(result: beater_os_core::DecisionResult) -> bool {
+    matches!(
+        result,
+        beater_os_core::DecisionResult::Allowed
+            | beater_os_core::DecisionResult::NeedsApproval
+            | beater_os_core::DecisionResult::NeedsSimulation
+    )
+}
+
+fn debit_manifest_budget(budget: &mut Budget, manifest: &ActionManifest) -> DaemonResult<()> {
+    if let Some(requested) = manifest.requested_budget.max_tool_calls {
+        let tool_calls = budget.max_tool_calls.get_or_insert(0);
+        *tool_calls = tool_calls.checked_add(requested).ok_or_else(|| {
+            DaemonError::Refused(format!(
+                "session budget replay overflowed pending tool-call reservation for action {}",
+                manifest.action_id
+            ))
+        })?;
+    }
+    if let Some(requested) = manifest.requested_budget.max_wall_ms {
+        let wall_ms = budget.max_wall_ms.get_or_insert(0);
+        *wall_ms = wall_ms.checked_add(requested).ok_or_else(|| {
+            DaemonError::Refused(format!(
+                "session budget replay overflowed pending wall-clock reservation for action {}",
+                manifest.action_id
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn debit_budget(budget: &mut Budget, requested: &Budget, action_id: &str) -> DaemonResult<()> {
+    if let Some(requested) = requested.max_tool_calls {
+        let tool_calls = budget.max_tool_calls.get_or_insert(0);
+        *tool_calls = tool_calls.checked_add(requested).ok_or_else(|| {
+            DaemonError::Refused(format!(
+                "session budget replay overflowed pending tool-call reservation for action {action_id}"
+            ))
+        })?;
+    }
+    if let Some(requested) = requested.max_wall_ms {
+        let wall_ms = budget.max_wall_ms.get_or_insert(0);
+        *wall_ms = wall_ms.checked_add(requested).ok_or_else(|| {
+            DaemonError::Refused(format!(
+                "session budget replay overflowed pending wall-clock reservation for action {action_id}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn runtime_budget_used_excluding(state: &AdmissionState, excluded_action_id: &str) -> Budget {
+    let mut used = state.session_budget_used.clone();
+    let Some(reserved) = state
+        .pending_runtime_budget_by_action
+        .get(excluded_action_id)
+    else {
+        return used;
+    };
+    if let (Some(used_calls), Some(reserved_calls)) =
+        (&mut used.max_tool_calls, reserved.max_tool_calls)
+    {
+        *used_calls = used_calls.saturating_sub(reserved_calls);
+        if *used_calls == 0 {
+            used.max_tool_calls = None;
+        }
+    }
+    if let (Some(used_wall_ms), Some(reserved_wall_ms)) =
+        (&mut used.max_wall_ms, reserved.max_wall_ms)
+    {
+        *used_wall_ms = used_wall_ms.saturating_sub(reserved_wall_ms);
+        if *used_wall_ms == 0 {
+            used.max_wall_ms = None;
+        }
+    }
+    used
 }
 
 fn payment_reserved_by_mandate_excluding(

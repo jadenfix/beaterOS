@@ -92,6 +92,10 @@ pub struct ProbeContext {
     pub session_id: String,
     pub policy_version: String,
     #[serde(default)]
+    pub session_budget: beater_os_core::Budget,
+    #[serde(default)]
+    pub session_budget_used: beater_os_core::Budget,
+    #[serde(default)]
     pub grants: Vec<CapabilityGrant>,
     #[serde(default)]
     pub approvals: Vec<ApprovalEvidence>,
@@ -112,6 +116,8 @@ impl ProbeContext {
             actor_id: self.actor_id,
             session_id: self.session_id,
             policy_version: self.policy_version,
+            session_budget: self.session_budget,
+            session_budget_used: self.session_budget_used,
             grants: self.grants,
             approvals: self.approvals,
             simulations: self.simulations,

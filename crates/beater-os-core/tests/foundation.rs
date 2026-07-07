@@ -72,6 +72,8 @@ fn admission_context(now: chrono::DateTime<Utc>, grants: Vec<CapabilityGrant>) -
         actor_id: "agent:beater-os".to_string(),
         session_id: "session-1".to_string(),
         policy_version: "policy-v1".to_string(),
+        session_budget: Budget::default(),
+        session_budget_used: Budget::default(),
         grants,
         approvals: Vec::new(),
         simulations: Vec::new(),

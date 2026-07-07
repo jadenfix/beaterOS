@@ -228,8 +228,12 @@ filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
    before anything is journaled or executed.
 3. **Admit.** The gateway derives the `ActionManifest` (`action_kind = execute`,
    kernel-derived `resolved_target`) and asks the daemon store to admit it,
-   including durable revocation overlays. No admission logic lives in the CLI.
-   `ActionProposed` and `PolicyDecided` are journaled.
+   including durable revocation overlays and replay-derived session budget
+   usage. Local-shell manifests debit one requested tool call and the sandbox
+   timeout as requested wall-clock budget; finite `AgentSession.budget`
+   `max_tool_calls` / `max_wall_ms` limits deny before execution when the
+   journaled receipts already exhaust the session envelope. No admission logic
+   lives in the CLI. `ActionProposed` and `PolicyDecided` are journaled.
 4. **Execute only if `Allowed`.** The confined child runs under macOS Seatbelt
    with filesystem writes limited to granted prefixes, network denied by
    default, and process execution limited to the resolved entry executable. It

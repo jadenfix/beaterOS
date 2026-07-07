@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::contracts::{
-    ActionKind, ActionManifest, ApprovalEvidence, ApprovalMode, CapabilityGrant, DataClass,
+    ActionKind, ActionManifest, ApprovalEvidence, ApprovalMode, Budget, CapabilityGrant, DataClass,
     DecisionResult, PaymentMandate, PolicyDecision, RiskClass, SideEffectClass, SimulationEvidence,
     TaintLabel, ToolManifest,
 };
@@ -17,6 +17,15 @@ pub struct AdmissionContext {
     pub actor_id: String,
     pub session_id: String,
     pub policy_version: String,
+    /// Declared session-level runtime budget. This is the scheduling envelope
+    /// for durable runtime work, distinct from per-grant attenuation and payment
+    /// mandates.
+    pub session_budget: Budget,
+    /// Replay-derived consumption already committed to the session journal.
+    /// Today this enforces tool-call and wall-clock dimensions that receipts can
+    /// prove. Model and payment dimensions require provider/payment-specific
+    /// receipts before they can be safely debited here.
+    pub session_budget_used: Budget,
     pub grants: Vec<CapabilityGrant>,
     pub approvals: Vec<ApprovalEvidence>,
     pub simulations: Vec<SimulationEvidence>,
@@ -90,6 +99,19 @@ impl PolicyEngine {
             ));
         }
         matched_rules.push("manifest_bound_to_context_session".to_string());
+
+        if let Some(reason) = session_budget_violation(manifest, ctx) {
+            return Ok(decision(
+                manifest,
+                manifest_hash,
+                ctx,
+                DecisionResult::Denied,
+                matched_rules,
+                &reason,
+                DecisionFollowup::none(),
+            ));
+        }
+        matched_rules.push("session_budget_available".to_string());
 
         let Some(tool) = ctx.tool_registry.get(&manifest.tool_id) else {
             if ctx.require_registered_tools {
@@ -427,6 +449,49 @@ impl PolicyEngine {
             "action admitted by explicit active capability grant",
             DecisionFollowup::none(),
         ))
+    }
+}
+
+fn session_budget_violation(manifest: &ActionManifest, ctx: &AdmissionContext) -> Option<String> {
+    if let Some(reason) = budget_dimension_violation(
+        "tool calls",
+        manifest.requested_budget.max_tool_calls,
+        ctx.session_budget_used.max_tool_calls.unwrap_or(0),
+        ctx.session_budget.max_tool_calls,
+    ) {
+        return Some(reason);
+    }
+    budget_dimension_violation(
+        "wall-clock milliseconds",
+        manifest.requested_budget.max_wall_ms,
+        ctx.session_budget_used.max_wall_ms.unwrap_or(0),
+        ctx.session_budget.max_wall_ms,
+    )
+}
+
+fn budget_dimension_violation(
+    dimension: &str,
+    requested: Option<u64>,
+    used: u64,
+    limit: Option<u64>,
+) -> Option<String> {
+    let limit = limit?;
+    let Some(requested) = requested else {
+        return Some(format!(
+            "session budget has a finite {dimension} limit but action did not declare requested {dimension}",
+        ));
+    };
+    let Some(projected) = used.checked_add(requested) else {
+        return Some(format!(
+            "session budget {dimension} usage overflowed while adding requested {requested}",
+        ));
+    };
+    if projected > limit {
+        Some(format!(
+            "session budget exceeded for {dimension}: used {used}, requested {requested}, limit {limit}",
+        ))
+    } else {
+        None
     }
 }
 

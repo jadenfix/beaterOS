@@ -43,6 +43,10 @@ impl Drop for TempDir {
 }
 
 fn session(root: &TempDir, session_id: &str) -> AgentSession {
+    session_with_budget(root, session_id, Budget::default())
+}
+
+fn session_with_budget(root: &TempDir, session_id: &str, budget: Budget) -> AgentSession {
     AgentSession {
         session_id: session_id.to_string(),
         created_at: Utc::now(),
@@ -53,7 +57,7 @@ fn session(root: &TempDir, session_id: &str) -> AgentSession {
         constraints: Vec::new(),
         policy_profile: "default".to_string(),
         initial_capability_ids: BTreeSet::from(["grant-exec".to_string()]),
-        budget: Budget::default(),
+        budget,
         model_policy: Default::default(),
         memory_scope: None,
         journal_root: root.path.display().to_string(),
@@ -363,6 +367,109 @@ fn gateway_receipt_records_observed_not_declared_side_effects() {
             .side_effect_summary
             .contains("declared_not_observed")
     );
+}
+
+#[test]
+fn gateway_denies_after_session_tool_call_budget_is_spent() {
+    let home = TempDir::new("home-tool-budget");
+    let work = TempDir::new("work-tool-budget");
+    let session_id = "sess_gateway_tool_budget";
+    let workdir = work.canonical();
+    let args = vec!["-c".to_string(), "printf gateway > out.txt".to_string()];
+    let store = daemon_store_with_registered_shell(&home, &workdir, "sh", &args);
+    store
+        .create_session(&session_with_budget(
+            &home,
+            session_id,
+            Budget {
+                max_model_cents: None,
+                max_tool_calls: Some(1),
+                max_wall_ms: None,
+                max_payment_minor_units: None,
+            },
+        ))
+        .unwrap();
+    store
+        .issue_grant(session_id, exec_grant(session_id, &workdir), Utc::now())
+        .unwrap();
+
+    let first = execute_local_tool(
+        &store,
+        &registry(&workdir),
+        invocation(session_id, &workdir, "act-tool-budget-1"),
+    )
+    .unwrap();
+    assert_eq!(
+        first.decision.result,
+        beater_os_core::DecisionResult::Allowed
+    );
+    assert!(first.execution.is_some());
+
+    let second = execute_local_tool(
+        &store,
+        &registry(&workdir),
+        invocation(session_id, &workdir, "act-tool-budget-2"),
+    )
+    .unwrap();
+    assert_eq!(
+        second.decision.result,
+        beater_os_core::DecisionResult::Denied
+    );
+    assert!(
+        second
+            .decision
+            .explanation
+            .contains("session budget exceeded for tool calls")
+    );
+    assert!(second.execution.is_none());
+    assert!(second.receipt.is_none());
+    assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 1);
+}
+
+#[test]
+fn gateway_denies_when_requested_wall_budget_exceeds_session_limit() {
+    let home = TempDir::new("home-wall-budget");
+    let work = TempDir::new("work-wall-budget");
+    let session_id = "sess_gateway_wall_budget";
+    let workdir = work.canonical();
+    let args = vec!["-c".to_string(), "printf gateway > out.txt".to_string()];
+    let store = daemon_store_with_registered_shell(&home, &workdir, "sh", &args);
+    store
+        .create_session(&session_with_budget(
+            &home,
+            session_id,
+            Budget {
+                max_model_cents: None,
+                max_tool_calls: None,
+                max_wall_ms: Some(1),
+                max_payment_minor_units: None,
+            },
+        ))
+        .unwrap();
+    store
+        .issue_grant(session_id, exec_grant(session_id, &workdir), Utc::now())
+        .unwrap();
+
+    let outcome = execute_local_tool(
+        &store,
+        &registry(&workdir),
+        invocation(session_id, &workdir, "act-wall-budget"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        outcome.decision.result,
+        beater_os_core::DecisionResult::Denied
+    );
+    assert!(
+        outcome
+            .decision
+            .explanation
+            .contains("session budget exceeded for wall-clock milliseconds")
+    );
+    assert!(outcome.execution.is_none());
+    assert!(outcome.receipt.is_none());
+    assert!(!PathBuf::from(&workdir).join("out.txt").exists());
 }
 
 #[test]

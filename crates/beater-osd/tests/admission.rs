@@ -265,6 +265,75 @@ fn manifest(session_id: &str, action_id: &str) -> ActionManifest {
     }
 }
 
+#[test]
+fn pending_allowed_action_reserves_session_tool_budget_before_receipt() {
+    let root = TempDir::new("pending-budget");
+    let store = Store::open(&root.path).unwrap();
+    let session_id = "sess_pending_budget";
+    let mut session = session(&root, session_id);
+    session.budget = Budget {
+        max_model_cents: None,
+        max_tool_calls: Some(1),
+        max_wall_ms: None,
+        max_payment_minor_units: None,
+    };
+    store.create_session(&session).unwrap();
+    append_grant(&store, session_id, grant(session_id));
+
+    let mut first = manifest(session_id, "act-budget-1");
+    first.requested_budget.max_tool_calls = Some(1);
+    let first_outcome = store.admit_action(session_id, first).unwrap();
+    assert_eq!(first_outcome.decision.result, DecisionResult::Allowed);
+
+    let mut second = manifest(session_id, "act-budget-2");
+    second.requested_budget.max_tool_calls = Some(1);
+    let second_outcome = store.admit_action(session_id, second).unwrap();
+
+    assert_eq!(second_outcome.decision.result, DecisionResult::Denied);
+    assert!(
+        second_outcome
+            .decision
+            .explanation
+            .contains("session budget exceeded for tool calls")
+    );
+}
+
+#[test]
+fn current_pending_action_budget_is_excluded_during_readmission() {
+    let root = TempDir::new("readmit-budget");
+    let store = Store::open(&root.path).unwrap();
+    let session_id = "sess_readmit_budget";
+    let mut session = session_with_initial(&root, session_id, ["grant-deploy"]);
+    session.budget = Budget {
+        max_model_cents: None,
+        max_tool_calls: Some(1),
+        max_wall_ms: None,
+        max_payment_minor_units: None,
+    };
+    store.create_session(&session).unwrap();
+    append_grant(&store, session_id, deploy_grant(session_id));
+
+    let mut action = deploy_manifest(session_id, "act-readmit-budget");
+    action.requested_budget.max_tool_calls = Some(1);
+    let first = store.admit_action(session_id, action.clone()).unwrap();
+    assert_eq!(first.decision.result, DecisionResult::NeedsApproval);
+
+    store
+        .record_approval(session_id, approval_for(&action), Utc::now())
+        .unwrap();
+    let second = store.admit_action(session_id, action).unwrap();
+
+    assert_eq!(second.decision.result, DecisionResult::NeedsSimulation);
+    assert!(
+        !second
+            .decision
+            .explanation
+            .contains("session budget exceeded"),
+        "{}",
+        second.decision.explanation
+    );
+}
+
 fn receipt_input(action_id: &str) -> CapabilityReceiptInput {
     CapabilityReceiptInput {
         receipt_id: None,
