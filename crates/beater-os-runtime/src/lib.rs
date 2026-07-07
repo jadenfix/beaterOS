@@ -1477,12 +1477,12 @@ struct RuntimeLeaseHeartbeatWatchdog {
 }
 
 impl RuntimeLeaseHeartbeatWatchdog {
-    fn stop(self) -> RuntimeResult<Option<RuntimeLeaseHeartbeatReport>> {
+    fn stop(self) -> RuntimeResult<RuntimeLeaseHeartbeatReport> {
         self.stop.store(true, Ordering::SeqCst);
         let report = self.handle.join().map_err(|_| {
             RuntimeError::Refused("lease heartbeat watchdog panicked".to_string())
         })??;
-        Ok(Some(report))
+        Ok(report)
     }
 }
 
