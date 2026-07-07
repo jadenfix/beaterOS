@@ -472,13 +472,13 @@ impl AgentRuntime {
                 request
                     .action_id
                     .as_ref()
-                    .map_or(true, |action_id| action_id == &lease.action_id)
+                    .is_none_or(|action_id| action_id == &lease.action_id)
             })
             .filter(|lease| {
                 request
                     .lease_id
                     .as_ref()
-                    .map_or(true, |lease_id| lease_id == &lease.lease_id)
+                    .is_none_or(|lease_id| lease_id == &lease.lease_id)
             });
         let Some(open_lease) = matching_open_leases.next() else {
             return Ok(None);
