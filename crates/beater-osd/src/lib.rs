@@ -237,6 +237,18 @@ pub struct ExecutionLeaseOutcome {
     pub lease: ExecutionLease,
 }
 
+/// Daemon-owned request to claim an execution lease from already-admitted
+/// journal state. Callers provide only compare-and-set identity fields; the
+/// duplicated executable authority on [`ExecutionLease`] is copied from the
+/// stored manifest and latest allowed decision under the session lock.
+#[derive(Debug, Clone)]
+pub struct ExecutionLeaseClaimRequest {
+    pub lease_id: String,
+    pub action_id: String,
+    pub expected_manifest_hash: HashValue,
+    pub expected_decision_id: String,
+}
+
 /// Durable lifecycle transition applied by the daemon store.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionTransition {
@@ -1003,6 +1015,116 @@ impl Store {
         })
     }
 
+    /// Atomically claim a latest-allowed execute action by deriving the lease
+    /// from daemon-owned admission state instead of accepting duplicated
+    /// authority fields from the caller.
+    pub fn claim_execution_lease_from_admission(
+        &self,
+        session_id: &str,
+        request: ExecutionLeaseClaimRequest,
+        _created_at: DateTime<Utc>,
+    ) -> DaemonResult<ExecutionLeaseOutcome> {
+        self.with_session_lock(session_id, || {
+            if request.lease_id.trim().is_empty() {
+                return Err(DaemonError::invalid("lease_id", request.lease_id));
+            }
+            if request.action_id.trim().is_empty() {
+                return Err(DaemonError::invalid("action_id", request.action_id));
+            }
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            let decision = admission_state
+                .latest_decisions
+                .get(&request.action_id)
+                .ok_or_else(|| {
+                    DaemonError::Refused(format!(
+                        "action {} has no policy decision for execution lease",
+                        request.action_id
+                    ))
+                })?;
+            if decision.decision_id != request.expected_decision_id {
+                return Err(DaemonError::Refused(format!(
+                    "action {} latest decision {} does not match expected decision {}",
+                    request.action_id, decision.decision_id, request.expected_decision_id
+                )));
+            }
+            if decision.manifest_hash != request.expected_manifest_hash {
+                return Err(DaemonError::Refused(format!(
+                    "action {} latest decision manifest hash does not match expected manifest hash",
+                    request.action_id
+                )));
+            }
+            let proposal = admission_state
+                .proposals
+                .get(&request.action_id)
+                .ok_or_else(|| {
+                    DaemonError::Refused(format!(
+                        "action {} has no proposed manifest for execution lease",
+                        request.action_id
+                    ))
+                })?;
+            let manifest_hash = proposal.manifest.digest().map_err(DaemonError::from)?;
+            if manifest_hash != request.expected_manifest_hash {
+                return Err(DaemonError::Refused(format!(
+                    "action {} stored manifest digest does not match expected manifest hash",
+                    request.action_id
+                )));
+            }
+            let requested_wall_ms = proposal.manifest.requested_budget.max_wall_ms.ok_or_else(
+                || {
+                    DaemonError::Refused(format!(
+                        "action {} must declare finite requested wall budget for execution lease",
+                        request.action_id
+                    ))
+                },
+            )?;
+            let lease_wall_ms = requested_wall_ms
+                .checked_add(EXECUTION_LEASE_OVERHEAD_GRACE_MS)
+                .ok_or_else(|| {
+                    DaemonError::Refused(format!(
+                        "action {} execution lease duration overflowed requested wall budget",
+                        request.action_id
+                    ))
+                })?;
+            let lease_issued_at = Utc::now();
+            let lease_expires_at = lease_issued_at
+                .checked_add_signed(TimeDelta::milliseconds(
+                    i64::try_from(lease_wall_ms).map_err(|_| {
+                        DaemonError::Refused(format!(
+                            "action {} execution lease duration cannot fit signed milliseconds",
+                            request.action_id
+                        ))
+                    })?,
+                ))
+                .ok_or_else(|| {
+                    DaemonError::Refused(format!(
+                        "action {} execution lease expiration overflowed daemon time",
+                        request.action_id
+                    ))
+                })?;
+            let target = proposal
+                .manifest
+                .resolved_target
+                .clone()
+                .unwrap_or_else(|| proposal.manifest.target.clone());
+            let lease = ExecutionLease {
+                lease_id: request.lease_id,
+                session_id: session_id.to_string(),
+                action_id: request.action_id,
+                manifest_hash: decision.manifest_hash.clone(),
+                decision_id: decision.decision_id.clone(),
+                tool_id: proposal.manifest.tool_id.clone(),
+                tool_ref: format!("{}#{}", proposal.manifest.tool_id, decision.manifest_hash),
+                target,
+                required_grants: proposal.manifest.required_grants.clone(),
+                requested_budget: proposal.manifest.requested_budget.clone(),
+                leased_at: lease_issued_at,
+                expires_at: lease_expires_at,
+            };
+            self.append_execution_lease_claim_unlocked(session_id, &mut journal, lease)
+        })
+    }
+
     /// Complete a previously claimed execution lease with a receipt. The lease
     /// must still be open and match `lease_id`; core journal causality verifies
     /// timing, target, tool, input digest, side-effect, and receipt-chain
@@ -1181,6 +1303,12 @@ impl Store {
                     lease.action_id
                 ))
             })?;
+        if proposal.manifest.action_kind != ActionKind::Execute {
+            return Err(DaemonError::Refused(format!(
+                "action {} is not an execute action and cannot receive an execution lease",
+                lease.action_id
+            )));
+        }
         let manifest_hash = proposal.manifest.digest().map_err(DaemonError::from)?;
         if manifest_hash != decision.manifest_hash {
             return Err(DaemonError::Refused(format!(
