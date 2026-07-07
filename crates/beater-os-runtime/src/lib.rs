@@ -209,12 +209,12 @@ impl AgentRuntime {
             issued_grants.push(grant.grant_id);
         }
 
-        let mut steps = Vec::new();
+        let mut step_reports = Vec::new();
         for step in steps {
             let outcome = self.admit_step(step)?;
             let report = RuntimeBundleStepReport::from_outcome(&outcome);
             let allowed = outcome.admission.decision.result == DecisionResult::Allowed;
-            steps.push(report);
+            step_reports.push(report);
             if !allowed {
                 break;
             }
@@ -225,7 +225,7 @@ impl AgentRuntime {
             session_id,
             created_session,
             issued_grants,
-            steps,
+            steps: step_reports,
             projection: RuntimeBundleProjectionSummary::from_projection(&projection),
         })
     }
