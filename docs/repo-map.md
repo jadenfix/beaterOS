@@ -22,6 +22,9 @@ review boundaries.
     `outcome_unknown` without fabricating a receipt.
   - Local loopback control-plane API for health and token-gated session
     projection.
+  - Store-owned claimable execution-action projection so scheduler workers get
+    manifest hash, decision id, target, budget, grants, and pinned tool
+    version/digest from the daemon authority instead of re-deriving lossy state.
   - Canonical proof of authority writes (`PolicyEngine` is only invocation point
     for admission decisions).
 - `crates/beater-osd-http`
@@ -58,6 +61,9 @@ review boundaries.
   - Registered-tool resolution, kernel-derived manifest construction, daemon
     admission, durable execution lease acquisition, sandbox execution, and
     receipt append for local shell tools.
+  - Lease-bound local-shell worker execution for already-admitted actions:
+    re-check active grants, registry pin, admitted input digest, confinement,
+    and observed side effects before completing the open daemon lease.
 - `crates/beater-os-runtime`
   - Typed agent runtime loop over the daemon store: session bootstrap, bounded
     grant issuance, sequential step admission, and no-side-effect observation
