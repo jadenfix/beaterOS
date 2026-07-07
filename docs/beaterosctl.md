@@ -450,6 +450,18 @@ bootstrap a new session and its declared root capability, so this route is an
 authenticated authority-minting surface for new runtime work, not a read-only
 replay or import API.
 
+`POST /v1/sessions/<id>/actions/execute-local-shell` also acts as the first
+dispatch bridge for scheduler-visible runnable work. When the request supplies
+an `action_id` that is already present in the session journal, the route refuses
+unless the latest decision for that action is `Allowed` and the action has no
+receipt, execution lease, or outcome-unknown reconciliation. If eligible, the
+same request body must reconstruct the original action manifest; the daemon
+rejects mismatches before issuing the execution lease. Successful responses
+include `dispatch: "runnable_pending_action"` for this path and
+`dispatch: "new_action"` for fresh action submission. The durable execution
+lease remains the atomic worker claim, so competing workers cannot both execute
+the same pending action.
+
 ## Scope boundary
 
 `action execute` now routes through the gateway and a daemon-owned durable local
