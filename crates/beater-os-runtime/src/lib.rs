@@ -322,7 +322,7 @@ impl AgentRuntime {
                 version: prepared.tool_version.clone(),
                 content_digest: prepared.expected_tool_digest.clone(),
                 side_effects: prepared.registered_side_effects.clone(),
-                risk_class: prepared.risk.clone(),
+                risk_class: prepared.risk,
             })?;
         let claimable = self
             .store
@@ -1475,7 +1475,7 @@ fn prepare_local_shell_worker(
         tool_id,
         tool_version,
         registered_side_effects,
-        risk: request.risk.clone().unwrap_or(RiskClass::Low),
+        risk: request.risk.unwrap_or(RiskClass::Low),
     })
 }
 
