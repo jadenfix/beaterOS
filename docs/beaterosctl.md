@@ -272,9 +272,13 @@ contract. The route accepts a bounded JSON `RuntimeBundle`, runs it through
 `RuntimeBundleOutcome` including step replay evidence. It does not import trace
 exports or replay historical journals into live state: each submitted bundle is
 new runtime work that must pass the current daemon admission path. Observation
-receipts remain limited to no-side-effect steps; real process/tool side effects
-still belong behind `execute-local-shell`, the gateway, sandbox confinement, and
-receipt path.
+receipts remain limited to no-side-effect steps and are bound to the dedicated
+`tool:beater-os-runtime` observation tool; bundle submissions cannot mint
+receipts for gateway tools such as `shell`. Real process/tool side effects still
+belong behind `execute-local-shell`, the gateway, sandbox confinement, and
+receipt path. A token-authorized bundle may bootstrap a new session and its
+declared root capability, so this route is an authenticated authority-minting
+surface for new runtime work, not a read-only replay or import API.
 
 ## Scope boundary
 
