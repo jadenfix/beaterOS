@@ -846,22 +846,25 @@ fn claim_execution_lease_route(
         },
         Utc::now(),
     ) {
-        Ok(outcome) => serialize_response(
-            201,
-            &ClaimExecutionLeaseResponse {
-                session_id: outcome.lease.session_id,
-                action_id: outcome.lease.action_id,
-                lease_id: outcome.lease.lease_id,
-                manifest_hash: outcome.lease.manifest_hash,
-                decision_id: outcome.lease.decision_id,
-                tool_id: outcome.lease.tool_id,
-                tool_ref: outcome.lease.tool_ref,
-                expires_at: outcome.lease.expires_at.to_rfc3339(),
-                lease_seq: outcome.lease_record.seq,
-                lease_hash: outcome.lease_record.hash,
-                journal_root_hash: outcome.lease_record.hash,
-            },
-        ),
+        Ok(outcome) => {
+            let lease_hash = outcome.lease_record.hash;
+            serialize_response(
+                201,
+                &ClaimExecutionLeaseResponse {
+                    session_id: outcome.lease.session_id,
+                    action_id: outcome.lease.action_id,
+                    lease_id: outcome.lease.lease_id,
+                    manifest_hash: outcome.lease.manifest_hash,
+                    decision_id: outcome.lease.decision_id,
+                    tool_id: outcome.lease.tool_id,
+                    tool_ref: outcome.lease.tool_ref,
+                    expires_at: outcome.lease.expires_at.to_rfc3339(),
+                    lease_seq: outcome.lease_record.seq,
+                    lease_hash: lease_hash.clone(),
+                    journal_root_hash: lease_hash,
+                },
+            )
+        }
         Err(err) => daemon_error_response(err),
     }
 }
@@ -893,20 +896,23 @@ fn complete_execution_lease_route(
         );
     }
     match store.append_receipt_for_execution_lease(session_id, lease_id, input, Utc::now()) {
-        Ok(outcome) => serialize_response(
-            200,
-            &CompleteExecutionLeaseResponse {
-                session_id: session_id.to_string(),
-                action_id: action_id.to_string(),
-                lease_id: lease_id.to_string(),
-                receipt_id: outcome.receipt.receipt_id,
-                receipt_seq: outcome.receipt.seq,
-                receipt_hash: outcome.receipt.receipt_hash,
-                receipt_journal_seq: outcome.receipt_record.seq,
-                receipt_journal_hash: outcome.receipt_record.hash,
-                final_journal_root_hash: outcome.receipt_record.hash,
-            },
-        ),
+        Ok(outcome) => {
+            let receipt_journal_hash = outcome.receipt_record.hash;
+            serialize_response(
+                200,
+                &CompleteExecutionLeaseResponse {
+                    session_id: session_id.to_string(),
+                    action_id: action_id.to_string(),
+                    lease_id: lease_id.to_string(),
+                    receipt_id: outcome.receipt.receipt_id,
+                    receipt_seq: outcome.receipt.seq,
+                    receipt_hash: outcome.receipt.receipt_hash,
+                    receipt_journal_seq: outcome.receipt_record.seq,
+                    receipt_journal_hash: receipt_journal_hash.clone(),
+                    final_journal_root_hash: receipt_journal_hash,
+                },
+            )
+        }
         Err(err) => daemon_error_response(err),
     }
 }
