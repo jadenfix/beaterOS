@@ -93,6 +93,26 @@
         "actions": { "type": "array", "items": { "$ref": "#/$defs/action_kind" }, "uniqueItems": true }
       }
     },
+    "execution_lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Daemon-issued single-use authority to execute one previously Allowed action. The lease is journaled and synced before side effects begin.",
+      "required": ["lease_id", "session_id", "action_id", "manifest_hash", "decision_id", "tool_id", "tool_ref", "target", "leased_at", "expires_at"],
+      "properties": {
+        "lease_id": { "type": "string", "minLength": 1 },
+        "session_id": { "type": "string", "minLength": 1 },
+        "action_id": { "type": "string", "minLength": 1 },
+        "manifest_hash": { "$ref": "#/$defs/hash_value" },
+        "decision_id": { "type": "string", "minLength": 1 },
+        "tool_id": { "type": "string", "minLength": 1 },
+        "tool_ref": { "type": "string", "minLength": 1 },
+        "target": { "$ref": "#/$defs/capability_selector" },
+        "required_grants": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "requested_budget": { "$ref": "#/$defs/budget" },
+        "leased_at": { "$ref": "#/$defs/timestamp" },
+        "expires_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
     "grant_constraints": {
       "type": "object",
       "additionalProperties": false,

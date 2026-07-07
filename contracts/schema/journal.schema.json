@@ -81,6 +81,14 @@
         },
         {
           "additionalProperties": false,
+          "required": ["kind", "lease"],
+          "properties": {
+            "kind": { "const": "execution_lease_issued" },
+            "lease": { "$ref": "common.schema.json#/$defs/execution_lease" }
+          }
+        },
+        {
+          "additionalProperties": false,
           "required": ["kind", "approval"],
           "properties": {
             "kind": { "const": "approval_recorded" },

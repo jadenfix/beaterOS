@@ -234,15 +234,30 @@ filesystem-diff receipt of its observed side effects. The flow, all fail-closed:
    `max_tool_calls` / `max_wall_ms` limits deny before execution when the
    journaled receipts already exhaust the session envelope. No admission logic
    lives in the CLI. `ActionProposed` and `PolicyDecided` are journaled.
-4. **Execute only if `Allowed`.** The confined child runs under macOS Seatbelt
-   with filesystem writes limited to granted prefixes, network denied by
-   default, and process execution limited to the resolved entry executable. It
-   also gets an **explicit environment allowlist** (`env_clear` + a CLI-owned
-   safe `PATH` baseline, plus any repeated `--env BEATER_NAME=VALUE`; no
-   inherited secrets), a **wall-clock timeout**, and **capped** stdout/stderr.
-   Invalid env names, duplicate names, unsafe names outside `BEATER_*`, or
-   `PATH` overrides fail closed before the action is journaled. Otherwise the
-   decision is printed and nothing runs.
+4. **Acquire a durable execution lease, then execute only if `Allowed`.**
+   `Allowed` is not executable authority by itself. Before spawning the child,
+   the gateway asks `beater-osd` to append an `ExecutionLeaseIssued` event bound
+   to the exact decision id, manifest hash, tool ref, resolved target, required
+   grants, and requested runtime budget. The lease expiry covers the sandbox
+   timeout plus a bounded two-second gateway overhead grace for durable append,
+   preflight, and receipt bookkeeping; it does not widen the sandbox's own
+   timeout. The daemon stamps the lease issuance time after acquiring the
+   session lock, so lock wait cannot backdate executable authority. Journal
+   appends are flushed and synced
+   before the daemon returns from the append path, so the lease is durable before
+   the gateway starts the side-effecting process. The same daemon session lock is
+   held through lease append, sandbox execution, and receipt append, so lifecycle
+   transitions cannot interleave. If a process fails after the lease is written
+   but before a receipt exists, replay sees an open lease and refuses to run the
+   action again until a future reconciliation path handles it explicitly. The
+   confined child runs under macOS Seatbelt with filesystem writes limited to
+   granted prefixes, network denied by default, and process execution limited
+   to the resolved entry executable. It also gets an **explicit environment
+   allowlist** (`env_clear` + a CLI-owned safe `PATH` baseline, plus any
+   repeated `--env BEATER_NAME=VALUE`; no inherited secrets), a **wall-clock
+   timeout**, and **capped** stdout/stderr. Invalid env names, duplicate names,
+   unsafe names outside `BEATER_*`, or `PATH` overrides fail closed before the
+   action is journaled. Otherwise the decision is printed and nothing runs.
 5. **Filesystem-diff receipt.** The confined directory is snapshotted (path ->
    SHA-256) before and after; the created/modified/deleted diff is the observed
    side effect. A `CapabilityReceipt` (input digest = command+args+environment,
@@ -322,10 +337,12 @@ resume, restore, or live replay path.
   receipt requirement.
 - **Policy outside the model.** Admission is computed by `PolicyEngine`, which
   has no model dependency.
-- **Journal before side effects.** `ActionProposed` and `PolicyDecided` are
-  written by `beater-osd::Store::admit_action` before any receipt can exist.
+- **Journal before side effects.** `ActionProposed`, `PolicyDecided`, and for
+  real gateway execution `ExecutionLeaseIssued` are written by the daemon before
+  any side-effecting process can spawn or any receipt can exist.
 - **Receipts after side effects.** A receipt can only be recorded for an action
-  with a prior `Allowed` decision; `beater-osd::Store::append_receipt` refuses
+  with a prior `Allowed` decision; gateway-executed receipts additionally
+  consume the open execution lease. `beater-osd::Store::append_receipt` refuses
   otherwise through the core journal causality verifier.
 - **Tamper-evident.** `journal verify` recomputes every hash and rejects any
   reordered or edited record.
@@ -368,7 +385,9 @@ only when policy returns `Allowed`, and appends the receipt through the daemon
 store. Successful execution responses include an `evidence` object that binds
 the admitted manifest hash, proposal and decision journal records, exact
 `tool_id@version#digest`, receipt journal record, receipt root hash, and final
-journal root hash. Denied actions remain receipt-free and do not include
+journal root hash. Successful responses also include the durable execution
+lease id, lease journal sequence, and lease journal hash between the decision
+and receipt records. Denied actions remain receipt-free and do not include
 side-effect execution evidence.
 
 The hosted `beater-os-runtime` crate now exposes a typed runtime bundle for

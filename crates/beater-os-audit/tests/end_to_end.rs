@@ -252,6 +252,7 @@ fn trace_bundle_from_snapshot(snapshot: &JournalSnapshot) -> TraceBundle {
             JournalEvent::ReceiptAppended { receipt } => bundle.receipts.push(receipt.clone()),
             JournalEvent::SessionStatusChanged { .. }
             | JournalEvent::CapabilityRevoked { .. }
+            | JournalEvent::ExecutionLeaseIssued { .. }
             | JournalEvent::MemoryWritten { .. }
             | JournalEvent::ScenarioEvaluated { .. }
             | JournalEvent::IncidentAnnotated { .. } => {}

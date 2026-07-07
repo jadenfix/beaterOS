@@ -109,6 +109,15 @@ fn summarize_event(event: &JournalEvent) -> String {
             "decision={} action={} result={:?} why={:?}",
             decision.decision_id, decision.action_id, decision.result, decision.explanation
         ),
+        JournalEvent::ExecutionLeaseIssued { lease } => format!(
+            "lease={} action={} tool_ref={} target={:?}:{} expires={}",
+            lease.lease_id,
+            lease.action_id,
+            lease.tool_ref,
+            lease.target.resource_kind,
+            lease.target.resource_id,
+            lease.expires_at.to_rfc3339()
+        ),
         JournalEvent::ApprovalRecorded { approval } => format!(
             "approval={} action={} grant={} reviewer={}",
             approval.review_id, approval.action_id, approval.grant_id, approval.reviewer_id

@@ -24,14 +24,14 @@ use std::time::{Duration, Instant};
 use beater_os_core::{
     ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, Budget,
     CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult,
-    DelegationMode, HashValue, InMemoryJournal, JournalEvent, JournalRecord, JournalSnapshot,
-    PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind, RiskClass,
-    SessionStatus, SideEffectClass, SimulationEvidence, ToolManifest,
+    DelegationMode, ExecutionLease, HashValue, InMemoryJournal, JournalEvent, JournalRecord,
+    JournalSnapshot, PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind,
+    RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, ToolManifest,
 };
 use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 
 pub use crate::error::{DaemonError, DaemonResult};
 
@@ -41,6 +41,7 @@ const RECEIPTS_FILE: &str = "receipts.jsonl";
 const TOOL_REGISTRY_FILE: &str = "tool-registry.json";
 const TOOL_REGISTRY_LOCK: &str = "tool-registry.lock";
 const LOCK_SUFFIX: &str = ".lock";
+const EXECUTION_LEASE_OVERHEAD_GRACE_MS: u64 = 2_000;
 /// Policy contract version enforced by daemon-owned authority writes.
 pub const DAEMON_POLICY_VERSION: &str = "beateros-policy-v0";
 
@@ -154,6 +155,7 @@ pub struct SessionProjection {
     pub mandates: Vec<PaymentMandate>,
     pub manifests: Vec<ActionManifest>,
     pub decisions: Vec<PolicyDecision>,
+    pub execution_leases: Vec<ExecutionLease>,
     pub approvals: Vec<ApprovalEvidence>,
     pub simulations: Vec<SimulationEvidence>,
     pub receipts: Vec<CapabilityReceipt>,
@@ -224,6 +226,13 @@ pub struct AdmissionOutcome {
 pub struct ReceiptAppendOutcome {
     pub receipt_record: JournalRecord,
     pub receipt: CapabilityReceipt,
+}
+
+/// Result of issuing a durable execution lease through the daemon boundary.
+#[derive(Debug, Clone)]
+pub struct ExecutionLeaseOutcome {
+    pub lease_record: JournalRecord,
+    pub lease: ExecutionLease,
 }
 
 /// Durable lifecycle transition applied by the daemon store.
@@ -445,6 +454,12 @@ impl Store {
             JournalEvent::ReceiptAppended { .. } => {
                 return Err(DaemonError::Refused(
                     "ReceiptAppended must be written through append_receipt".to_string(),
+                ));
+            }
+            JournalEvent::ExecutionLeaseIssued { .. } => {
+                return Err(DaemonError::Refused(
+                    "ExecutionLeaseIssued must be written through execute_and_append_receipt"
+                        .to_string(),
                 ));
             }
             JournalEvent::PolicyDecided { .. } => {
@@ -805,7 +820,7 @@ impl Store {
         &self,
         session_id: &str,
         input: CapabilityReceiptInput,
-        created_at: DateTime<Utc>,
+        _created_at: DateTime<Utc>,
     ) -> DaemonResult<ReceiptAppendOutcome> {
         self.with_session_lock(session_id, || {
             let projection = self.project_unlocked(session_id)?;
@@ -817,7 +832,7 @@ impl Store {
                 JournalEvent::ReceiptAppended {
                     receipt: receipt.clone(),
                 },
-                created_at,
+                Utc::now(),
             )?;
             Ok(ReceiptAppendOutcome {
                 receipt_record,
@@ -826,24 +841,110 @@ impl Store {
         })
     }
 
-    /// Run one execution callback while holding the per-session daemon lock,
-    /// then append the returned receipt input before releasing the lock.
+    /// Append a durable execution lease, run one execution callback while
+    /// holding the per-session daemon lock, then append the returned receipt
+    /// input before releasing the lock.
     ///
-    /// This is the minimal runtime lease for local tool execution: lifecycle
-    /// transitions and competing daemon writes cannot interleave between the
-    /// running-session check and durable receipt append.
+    /// This is the gateway runtime authority handoff for local tool execution:
+    /// `Allowed` is not executable authority until this method journals and
+    /// syncs the lease. Lifecycle transitions and competing daemon writes
+    /// cannot interleave between lease issuance, execution, and receipt append.
     pub fn execute_and_append_receipt<T, E>(
         &self,
         session_id: &str,
-        created_at: DateTime<Utc>,
+        mut lease: ExecutionLease,
+        _created_at: DateTime<Utc>,
         execute: impl FnOnce(&SessionProjection) -> Result<(CapabilityReceiptInput, T), E>,
-    ) -> Result<(ReceiptAppendOutcome, T), E>
+    ) -> Result<(ExecutionLeaseOutcome, ReceiptAppendOutcome, T), E>
     where
         E: From<DaemonError>,
     {
         let _lock = self.acquire_session_lock(session_id).map_err(E::from)?;
-        let projection = self.project_unlocked(session_id).map_err(E::from)?;
+        if lease.session_id != session_id {
+            return Err(DaemonError::Refused(format!(
+                "execution lease {} is bound to session {}, not {session_id}",
+                lease.lease_id, lease.session_id
+            ))
+            .into());
+        }
+        let mut journal = self.load_journal_unlocked(session_id).map_err(E::from)?;
+        let projection = project_journal(session_id, &journal).map_err(E::from)?;
         ensure_session_running(&projection.session).map_err(E::from)?;
+        let admission_state =
+            admission_state_from_journal(session_id, &journal).map_err(E::from)?;
+        if admission_state
+            .open_execution_leases
+            .contains_key(&lease.action_id)
+        {
+            return Err(DaemonError::Refused(format!(
+                "action {} already has an open execution lease",
+                lease.action_id
+            ))
+            .into());
+        }
+        let lease_window = lease.expires_at.signed_duration_since(lease.leased_at);
+        if lease_window <= TimeDelta::zero() {
+            return Err(DaemonError::Refused(format!(
+                "execution lease {} has a non-positive duration",
+                lease.lease_id
+            ))
+            .into());
+        }
+        let requested_wall_ms = lease.requested_budget.max_wall_ms.ok_or_else(|| {
+            DaemonError::Refused(format!(
+                "execution lease {} must declare finite requested wall budget",
+                lease.lease_id
+            ))
+        })?;
+        let max_lease_ms = requested_wall_ms
+            .checked_add(EXECUTION_LEASE_OVERHEAD_GRACE_MS)
+            .ok_or_else(|| {
+                DaemonError::Refused(format!(
+                    "execution lease {} duration overflowed requested wall budget",
+                    lease.lease_id
+                ))
+            })?;
+        let max_lease_window =
+            TimeDelta::milliseconds(i64::try_from(max_lease_ms).map_err(|_| {
+                DaemonError::Refused(format!(
+                    "execution lease {} duration cannot fit signed milliseconds",
+                    lease.lease_id
+                ))
+            })?);
+        if lease_window > max_lease_window {
+            return Err(DaemonError::Refused(format!(
+                "execution lease {} duration exceeds requested wall budget plus daemon overhead grace",
+                lease.lease_id
+            ))
+            .into());
+        }
+        let lease_issued_at = Utc::now();
+        lease.leased_at = lease_issued_at;
+        lease.expires_at = lease_issued_at
+            .checked_add_signed(lease_window)
+            .ok_or_else(|| {
+                DaemonError::Refused(format!(
+                    "execution lease {} expiration overflowed daemon time",
+                    lease.lease_id
+                ))
+            })
+            .map_err(E::from)?;
+        let lease_record = journal
+            .append(
+                JournalEvent::ExecutionLeaseIssued {
+                    lease: lease.clone(),
+                },
+                lease_issued_at,
+            )
+            .map_err(DaemonError::from)
+            .map_err(E::from)?;
+        journal
+            .verify_chain()
+            .map_err(DaemonError::from)
+            .map_err(E::from)?;
+        self.write_journal_record_unlocked(session_id, &lease_record)
+            .map_err(E::from)?;
+        let projection = project_journal(session_id, &journal).map_err(E::from)?;
         let (input, outcome) = execute(&projection)?;
         let mut ledger = self
             .receipt_ledger_from_journal_unlocked(session_id)
@@ -858,10 +959,14 @@ impl Store {
                 JournalEvent::ReceiptAppended {
                     receipt: receipt.clone(),
                 },
-                created_at,
+                Utc::now(),
             )
             .map_err(E::from)?;
         Ok((
+            ExecutionLeaseOutcome {
+                lease_record,
+                lease,
+            },
             ReceiptAppendOutcome {
                 receipt_record,
                 receipt,
@@ -938,6 +1043,7 @@ impl Store {
             .append(true)
             .open(self.journal_path(session_id)?)?;
         file.write_all(batch.as_bytes())?;
+        file.sync_all()?;
         Ok(())
     }
 
@@ -1096,6 +1202,7 @@ fn project_journal(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<
     let mut mandates = Vec::new();
     let mut manifests = Vec::new();
     let mut decisions = Vec::new();
+    let mut execution_leases = Vec::new();
     let mut approvals = Vec::new();
     let mut simulations = Vec::new();
     let mut receipts = Vec::new();
@@ -1143,6 +1250,7 @@ fn project_journal(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<
                 manifests.push(manifest.as_ref().clone());
             }
             JournalEvent::PolicyDecided { decision } => decisions.push(decision.clone()),
+            JournalEvent::ExecutionLeaseIssued { lease } => execution_leases.push(lease.clone()),
             JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
             JournalEvent::SimulationRecorded { simulation } => simulations.push(simulation.clone()),
             JournalEvent::ReceiptAppended { receipt } => receipts.push(receipt.clone()),
@@ -1163,6 +1271,7 @@ fn project_journal(session_id: &str, journal: &InMemoryJournal) -> DaemonResult<
         mandates,
         manifests,
         decisions,
+        execution_leases,
         approvals,
         simulations,
         receipts,
@@ -1251,6 +1360,7 @@ struct AdmissionState {
     payment_reserved_by_mandate: BTreeMap<String, u64>,
     session_budget_used: Budget,
     pending_runtime_budget_by_action: BTreeMap<String, Budget>,
+    open_execution_leases: BTreeMap<String, ExecutionLease>,
     proposals: BTreeMap<String, ProposedAction>,
     latest_decisions: BTreeMap<String, PolicyDecision>,
     approvals: Vec<ApprovalEvidence>,
@@ -1275,6 +1385,7 @@ fn admission_state_from_journal(
     let mut payment_reserved_by_mandate = BTreeMap::new();
     let mut session_budget_used = Budget::default();
     let mut receipted_actions = BTreeSet::new();
+    let mut open_execution_leases = BTreeMap::new();
     let mut proposals = BTreeMap::new();
     let mut latest_decisions = BTreeMap::new();
     let mut approvals = Vec::new();
@@ -1353,10 +1464,22 @@ fn admission_state_from_journal(
             JournalEvent::PolicyDecided { decision } => {
                 latest_decisions.insert(decision.action_id.clone(), decision.clone());
             }
+            JournalEvent::ExecutionLeaseIssued { lease } => {
+                if open_execution_leases
+                    .insert(lease.action_id.clone(), lease.clone())
+                    .is_some()
+                {
+                    return Err(DaemonError::Refused(format!(
+                        "action {} already has an open execution lease",
+                        lease.action_id
+                    )));
+                }
+            }
             JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
             JournalEvent::SimulationRecorded { simulation } => simulations.push(simulation.clone()),
             JournalEvent::ReceiptAppended { receipt } => {
                 receipted_actions.insert(receipt.action_id.clone());
+                open_execution_leases.remove(&receipt.action_id);
                 debit_receipt_budget(&mut session_budget_used, receipt)?;
             }
             JournalEvent::MemoryWritten { .. }
@@ -1433,6 +1556,7 @@ fn admission_state_from_journal(
         payment_reserved_by_mandate,
         session_budget_used,
         pending_runtime_budget_by_action,
+        open_execution_leases,
         proposals,
         latest_decisions,
         approvals,
@@ -1603,6 +1727,7 @@ fn journal_event_id(event: &JournalEvent) -> Option<&str> {
         JournalEvent::PaymentMandateIssued { mandate } => Some(mandate.mandate_id.as_str()),
         JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
         JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
+        JournalEvent::ExecutionLeaseIssued { lease } => Some(lease.lease_id.as_str()),
         JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
         JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
         JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),

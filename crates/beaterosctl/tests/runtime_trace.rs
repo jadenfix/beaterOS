@@ -137,6 +137,18 @@ fn policy_decided_seq(records: &[JournalRecord], action_id: &str) -> u64 {
         .expect("policy decided event")
 }
 
+fn execution_lease_seq(records: &[JournalRecord], action_id: &str) -> u64 {
+    records
+        .iter()
+        .find_map(|record| match &record.event {
+            JournalEvent::ExecutionLeaseIssued { lease } if lease.action_id == action_id => {
+                Some(record.seq)
+            }
+            _ => None,
+        })
+        .expect("execution lease event")
+}
+
 fn decision_result(records: &[JournalRecord], action_id: &str) -> Option<DecisionResult> {
     records.iter().find_map(|record| match &record.event {
         JournalEvent::PolicyDecided { decision } if decision.action_id == action_id => {
@@ -210,6 +222,7 @@ fn allowed_execute_emits_action_decision_receipt_and_trace_evidence() {
     let records = journal_records(&h, session);
     let proposed_seq = action_proposed_seq(&records, "act-runtime-allowed");
     let decision_seq = policy_decided_seq(&records, "act-runtime-allowed");
+    let lease_seq = execution_lease_seq(&records, "act-runtime-allowed");
     assert_eq!(
         decision_result(&records, "act-runtime-allowed"),
         Some(DecisionResult::Allowed)
@@ -222,8 +235,8 @@ fn allowed_execute_emits_action_decision_receipt_and_trace_evidence() {
     );
     let (receipt_seq, receipt) = receipts[0];
     assert!(
-        proposed_seq < decision_seq && decision_seq < receipt_seq,
-        "allowed action journal order must be proposal < decision < receipt"
+        proposed_seq < decision_seq && decision_seq < lease_seq && lease_seq < receipt_seq,
+        "allowed action journal order must be proposal < decision < lease < receipt"
     );
     assert_eq!(receipt.status, "ok");
     assert_eq!(receipt.tool_id, "shell");

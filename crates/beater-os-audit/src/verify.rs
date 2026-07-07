@@ -421,6 +421,11 @@ fn check_referential_sessions(snapshot: &JournalSnapshot) -> CheckResult {
                 manifest.action_id.as_str(),
                 manifest.session_id.as_str(),
             )),
+            JournalEvent::ExecutionLeaseIssued { lease } => Some((
+                "execution lease",
+                lease.lease_id.as_str(),
+                lease.session_id.as_str(),
+            )),
             _ => None,
         };
         if let Some((kind, id, session_id)) = reference
@@ -606,6 +611,7 @@ fn check_receipt_causality(snapshot: &JournalSnapshot) -> CheckResult {
                     allowed.remove(decision.action_id.as_str());
                 }
             }
+            JournalEvent::ExecutionLeaseIssued { .. } => {}
             JournalEvent::ReceiptAppended { receipt } => {
                 let Some(manifest) = proposed.get(receipt.action_id.as_str()) else {
                     return CheckResult::fail(
@@ -742,6 +748,7 @@ fn primary_event_id(record: &JournalRecord) -> Option<&str> {
         JournalEvent::PaymentMandateIssued { mandate } => Some(mandate.mandate_id.as_str()),
         JournalEvent::ActionProposed { manifest } => Some(manifest.action_id.as_str()),
         JournalEvent::PolicyDecided { decision } => Some(decision.decision_id.as_str()),
+        JournalEvent::ExecutionLeaseIssued { lease } => Some(lease.lease_id.as_str()),
         JournalEvent::ApprovalRecorded { approval } => Some(approval.review_id.as_str()),
         JournalEvent::SimulationRecorded { simulation } => Some(simulation.simulation_id.as_str()),
         JournalEvent::ReceiptAppended { receipt } => Some(receipt.receipt_id.as_str()),

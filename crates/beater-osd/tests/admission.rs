@@ -11,9 +11,10 @@ use std::time::Duration;
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, ApprovalEvidence, ApprovalMode, ApprovalRequirement,
     BeaterOsError, Budget, CapabilityGrant, CapabilityReceiptInput, CapabilityScope,
-    CapabilitySelector, DataClass, DecisionResult, DelegationMode, GrantConstraints, JournalEvent,
-    PaymentIntent, PaymentMandate, PaymentReceiptEvidence, PaymentSettlementStatus, PolicyDecision,
-    ResourceKind, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, ToolManifest,
+    CapabilitySelector, DataClass, DecisionResult, DelegationMode, ExecutionLease,
+    GrantConstraints, JournalEvent, PaymentIntent, PaymentMandate, PaymentReceiptEvidence,
+    PaymentSettlementStatus, PolicyDecision, ResourceKind, RiskClass, SessionStatus,
+    SideEffectClass, SimulationEvidence, ToolManifest,
 };
 use beater_osd::{DaemonError, SessionTransition, Store, StoreOptions};
 use chrono::{TimeDelta, Utc};
@@ -254,7 +255,12 @@ fn manifest(session_id: &str, action_id: &str) -> ActionManifest {
         expected_outputs: Vec::new(),
         expected_side_effects: BTreeSet::from([SideEffectClass::LocalWrite]),
         required_grants: BTreeSet::from(["grant-write".to_string()]),
-        requested_budget: Budget::default(),
+        requested_budget: Budget {
+            max_model_cents: None,
+            max_tool_calls: None,
+            max_wall_ms: Some(10_000),
+            max_payment_minor_units: None,
+        },
         risk_class: RiskClass::Low,
         data_classes: BTreeSet::new(),
         taint: BTreeSet::new(),
@@ -417,6 +423,37 @@ fn fake_decision(manifest: &ActionManifest) -> PolicyDecision {
         required_review: None,
         required_simulation: None,
         created_at: Utc::now(),
+    }
+}
+
+fn execution_lease_for(
+    manifest: &ActionManifest,
+    decision: &PolicyDecision,
+    lease_id: &str,
+) -> ExecutionLease {
+    let now = Utc::now();
+    let lease_window_ms: i64 = manifest
+        .requested_budget
+        .max_wall_ms
+        .unwrap_or(10_000)
+        .try_into()
+        .unwrap();
+    ExecutionLease {
+        lease_id: lease_id.to_string(),
+        session_id: manifest.session_id.clone(),
+        action_id: manifest.action_id.clone(),
+        manifest_hash: decision.manifest_hash.clone(),
+        decision_id: decision.decision_id.clone(),
+        tool_id: manifest.tool_id.clone(),
+        tool_ref: format!("{}@test#digest", manifest.tool_id),
+        target: manifest
+            .resolved_target
+            .clone()
+            .unwrap_or_else(|| manifest.target.clone()),
+        required_grants: manifest.required_grants.clone(),
+        requested_budget: manifest.requested_budget.clone(),
+        leased_at: now,
+        expires_at: now + TimeDelta::milliseconds(lease_window_ms),
     }
 }
 
@@ -594,9 +631,11 @@ fn execution_lock_excludes_lifecycle_transition_until_receipt_append() {
     let session_id = "sess_execute_lock";
     store.create_session(&session(&root, session_id)).unwrap();
     append_grant(&store, session_id, grant(session_id));
-    store
-        .admit_action(session_id, manifest(session_id, "act-execute-lock"))
+    let execute_manifest = manifest(session_id, "act-execute-lock");
+    let admission = store
+        .admit_action(session_id, execute_manifest.clone())
         .unwrap();
+    let lease = execution_lease_for(&execute_manifest, &admission.decision, "lease-execute-lock");
 
     let store = Arc::new(store);
     let (callback_started_tx, callback_started_rx) = mpsc::channel();
@@ -606,6 +645,7 @@ fn execution_lock_excludes_lifecycle_transition_until_receipt_append() {
     let execute = thread::spawn(move || {
         execute_store.execute_and_append_receipt(
             session_id,
+            lease,
             Utc::now(),
             |projection| -> Result<(CapabilityReceiptInput, &'static str), DaemonError> {
                 assert_eq!(projection.session.status, SessionStatus::Running);
@@ -643,8 +683,9 @@ fn execution_lock_excludes_lifecycle_transition_until_receipt_append() {
         "{transition_result:?}"
     );
 
-    let (receipt_outcome, outcome) = execute.join().unwrap().unwrap();
+    let (lease_outcome, receipt_outcome, outcome) = execute.join().unwrap().unwrap();
     assert_eq!(outcome, "callback-finished");
+    assert_eq!(lease_outcome.lease.action_id, "act-execute-lock");
     assert_eq!(receipt_outcome.receipt.action_id, "act-execute-lock");
     assert_eq!(
         store.project(session_id).unwrap().session.status,
@@ -666,6 +707,17 @@ fn execution_lock_excludes_lifecycle_transition_until_receipt_append() {
             )
         })
         .unwrap();
+    let lease_pos = journal
+        .records()
+        .iter()
+        .position(|record| {
+            matches!(
+                &record.event,
+                JournalEvent::ExecutionLeaseIssued { lease }
+                    if lease.action_id == "act-execute-lock"
+            )
+        })
+        .unwrap();
     let pause_pos = journal
         .records()
         .iter()
@@ -677,7 +729,166 @@ fn execution_lock_excludes_lifecycle_transition_until_receipt_append() {
             )
         })
         .unwrap();
+    assert!(lease_pos < receipt_pos);
     assert!(receipt_pos < pause_pos);
+}
+
+#[test]
+fn open_execution_lease_blocks_reexecution_after_callback_failure() {
+    let (_root, store) = create_store_with_session("execute-open-lease", "sess_open_lease");
+    let session_id = "sess_open_lease";
+    append_grant(&store, session_id, grant(session_id));
+    let execute_manifest = manifest(session_id, "act-open-lease");
+    let admission = store
+        .admit_action(session_id, execute_manifest.clone())
+        .unwrap();
+    let lease = execution_lease_for(&execute_manifest, &admission.decision, "lease-open-failed");
+
+    let failed = store.execute_and_append_receipt(
+        session_id,
+        lease,
+        Utc::now(),
+        |_projection| -> Result<(CapabilityReceiptInput, ()), DaemonError> {
+            Err(DaemonError::Refused(
+                "simulated crash after lease".to_string(),
+            ))
+        },
+    );
+    assert!(
+        matches!(failed, Err(DaemonError::Refused(ref message)) if message.contains("simulated crash after lease")),
+        "{failed:?}"
+    );
+    assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
+
+    let retry_lease =
+        execution_lease_for(&execute_manifest, &admission.decision, "lease-open-retry");
+    let retry = store.execute_and_append_receipt(
+        session_id,
+        retry_lease,
+        Utc::now(),
+        |_projection| -> Result<(CapabilityReceiptInput, ()), DaemonError> {
+            Ok((receipt_input("act-open-lease"), ()))
+        },
+    );
+
+    assert!(
+        matches!(retry, Err(DaemonError::Refused(ref message)) if message.contains("already has an open execution lease")),
+        "{retry:?}"
+    );
+    let journal = store.load_journal(session_id).unwrap();
+    let leases = journal
+        .records()
+        .iter()
+        .filter(|record| matches!(record.event, JournalEvent::ExecutionLeaseIssued { .. }))
+        .count();
+    assert_eq!(leases, 1);
+    assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
+}
+
+#[test]
+fn expired_execution_lease_cannot_be_consumed_by_receipt() {
+    let (_root, store) = create_store_with_session("execute-expired-lease", "sess_expired_lease");
+    let session_id = "sess_expired_lease";
+    append_grant(&store, session_id, grant(session_id));
+    let execute_manifest = manifest(session_id, "act-expired-lease");
+    let admission = store
+        .admit_action(session_id, execute_manifest.clone())
+        .unwrap();
+    let now = Utc::now();
+    let mut lease = execution_lease_for(&execute_manifest, &admission.decision, "lease-expired");
+    lease.leased_at = now;
+    lease.expires_at = now + TimeDelta::milliseconds(1);
+
+    let result = store.execute_and_append_receipt(
+        session_id,
+        lease,
+        Utc::now(),
+        |_projection| -> Result<(CapabilityReceiptInput, ()), DaemonError> {
+            thread::sleep(Duration::from_millis(5));
+            Ok((receipt_input("act-expired-lease"), ()))
+        },
+    );
+
+    assert!(
+        matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("finished after execution lease")),
+        "{result:?}"
+    );
+    assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
+}
+
+#[test]
+fn public_receipt_append_cannot_backdate_expired_execution_lease() {
+    let (_root, store) = create_store_with_session("receipt-backdate-lease", "sess_backdate_lease");
+    let session_id = "sess_backdate_lease";
+    append_grant(&store, session_id, grant(session_id));
+    let execute_manifest = manifest(session_id, "act-backdate-lease");
+    let admission = store
+        .admit_action(session_id, execute_manifest.clone())
+        .unwrap();
+    let mut lease = execution_lease_for(&execute_manifest, &admission.decision, "lease-backdate");
+    lease.expires_at = lease.leased_at + TimeDelta::milliseconds(1);
+
+    let failed = store.execute_and_append_receipt(
+        session_id,
+        lease,
+        Utc::now(),
+        |_projection| -> Result<(CapabilityReceiptInput, ()), DaemonError> {
+            Err(DaemonError::Refused(
+                "simulated crash after lease".to_string(),
+            ))
+        },
+    );
+    assert!(
+        matches!(failed, Err(DaemonError::Refused(ref message)) if message.contains("simulated crash after lease")),
+        "{failed:?}"
+    );
+    let journal = store.load_journal(session_id).unwrap();
+    let issued_lease = journal
+        .records()
+        .iter()
+        .find_map(|record| match &record.event {
+            JournalEvent::ExecutionLeaseIssued { lease } if lease.lease_id == "lease-backdate" => {
+                Some(lease.clone())
+            }
+            _ => None,
+        })
+        .expect("issued execution lease");
+    thread::sleep(Duration::from_millis(5));
+
+    let mut backdated = receipt_input("act-backdate-lease");
+    backdated.started_at = issued_lease.leased_at;
+    backdated.finished_at = issued_lease.leased_at;
+    let result = store.append_receipt(session_id, backdated, issued_lease.leased_at);
+
+    assert!(
+        matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("journaled after execution lease")),
+        "{result:?}"
+    );
+    assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
+}
+
+#[test]
+fn execute_receipt_requires_open_execution_lease() {
+    let (_root, store) = create_store_with_session("receipt-execute-no-lease", "sess_no_lease");
+    let session_id = "sess_no_lease";
+    let mut execute_grant = grant(session_id);
+    execute_grant.scope.actions = BTreeSet::from([ActionKind::Execute]);
+    append_grant(&store, session_id, execute_grant);
+    let mut execute_manifest = manifest(session_id, "act-execute-no-lease");
+    execute_manifest.action_kind = ActionKind::Execute;
+    store.admit_action(session_id, execute_manifest).unwrap();
+
+    let result = store.append_receipt(
+        session_id,
+        receipt_input("act-execute-no-lease"),
+        Utc::now(),
+    );
+
+    assert!(
+        matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("without an open execution lease")),
+        "{result:?}"
+    );
+    assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
 }
 
 #[test]
