@@ -58,6 +58,17 @@ fn ok(home: &str, args: &[&str]) -> String {
     }
 }
 
+fn value_contains_null(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::Array(items) => items.iter().any(value_contains_null),
+        serde_json::Value::Object(map) => map.values().any(value_contains_null),
+        serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => false,
+    }
+}
+
 #[test]
 fn full_coding_workflow_end_to_end() {
     let home = TempHome::new();
@@ -239,6 +250,113 @@ fn full_coding_workflow_end_to_end() {
     assert!(
         trace.contains("refactor the parser"),
         "trace missing goal:\n{trace}"
+    );
+}
+
+#[test]
+fn trace_export_emits_schema_shaped_live_bundle() {
+    let home = TempHome::new();
+    let h = home.as_str();
+    let repo = home.child_dir("repo");
+    let file = PathBuf::from(&repo).join("README.md").display().to_string();
+    let session = "sess-export";
+
+    ok(
+        &h,
+        &[
+            "session",
+            "create",
+            "--session",
+            session,
+            "--agent",
+            "agent-export",
+            "--workspace",
+            "ws-export",
+            "--goal",
+            "export a live trace bundle",
+        ],
+    );
+    let grant_out = ok(
+        &h,
+        &[
+            "grant",
+            "issue",
+            "--session",
+            session,
+            "--resource-kind",
+            "file_path",
+            "--resource-id",
+            "*",
+            "--actions",
+            "read",
+            "--path-prefix",
+            &repo,
+            "--reason",
+            "trace export test",
+        ],
+    );
+    let grant_id = grant_out
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("issued grant "))
+        .expect("grant id in output");
+    ok(
+        &h,
+        &[
+            "action",
+            "propose",
+            "--session",
+            session,
+            "--tool",
+            "tool:beater-os-runtime",
+            "--kind",
+            "read",
+            "--target-kind",
+            "file_path",
+            "--target",
+            &file,
+            "--resolved-target",
+            &file,
+            "--grants",
+            grant_id,
+            "--action-id",
+            "act-export",
+            "--summary",
+            "read export fixture",
+        ],
+    );
+
+    let exported = ok(
+        &h,
+        &[
+            "trace",
+            "export",
+            "--session",
+            session,
+            "--bundle-id",
+            "export-bundle",
+            "--description",
+            "live export smoke",
+        ],
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&exported).expect("trace export should be JSON");
+    assert_eq!(json["bundle_id"], "export-bundle");
+    assert_eq!(json["description"], "live export smoke");
+    assert_eq!(json["sessions"][0]["session_id"], session);
+    assert_eq!(json["grants"].as_array().expect("grants array").len(), 1);
+    assert_eq!(
+        json["manifests"].as_array().expect("manifests array").len(),
+        1
+    );
+    assert_eq!(
+        json["decisions"].as_array().expect("decisions array").len(),
+        1
+    );
+    assert!(json["journal"].as_array().expect("journal array").len() >= 4);
+    assert!(
+        !value_contains_null(&json),
+        "trace export should omit null-valued optional fields: {exported}"
     );
 }
 
