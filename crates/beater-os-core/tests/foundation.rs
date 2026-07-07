@@ -138,11 +138,11 @@ fn mandate_for_spend(now: chrono::DateTime<Utc>) -> PaymentMandate {
         counterparty_policy: "prefix:vendor:".to_string(),
         purpose: "vendor payment".to_string(),
         expires_at: now + Duration::hours(1),
-        approval_threshold_minor_units: 10_000,
+        approval_threshold_minor_units: 1_000,
         idempotency_key: "pay-once".to_string(),
         receipt_requirement: "required".to_string(),
-        allowed_adapter_ids: BTreeSet::new(),
-        allowed_envelope_formats: BTreeSet::new(),
+        allowed_adapter_ids: set(["x402".to_string()]),
+        allowed_envelope_formats: set(["x402-payment-v1".to_string()]),
     }
 }
 
@@ -2008,6 +2008,40 @@ fn journal_rejects_payment_receipt_with_invalid_rail_receipt_hash()
         panic!("expected payment receipt causality error");
     };
     assert!(reason.contains("rail_receipt_hash"));
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_settled_payment_receipt_without_settled_at()
+-> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let manifest = spend_manifest();
+    let mut evidence = payment_receipt_evidence(&manifest);
+    evidence.settled_at = None;
+    let receipt = payment_receipt_for_manifest(&manifest, now, Some(evidence));
+    let journal = allowed_payment_journal(manifest, receipt, now)?;
+
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = journal.verify_chain().err() else {
+        panic!("expected payment receipt causality error");
+    };
+    assert!(reason.contains("requires settled_at"));
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_unsettled_payment_receipt_with_settled_at()
+-> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let manifest = spend_manifest();
+    let mut evidence = payment_receipt_evidence(&manifest);
+    evidence.settlement_status = PaymentSettlementStatus::Submitted;
+    let receipt = payment_receipt_for_manifest(&manifest, now, Some(evidence));
+    let journal = allowed_payment_journal(manifest, receipt, now)?;
+
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = journal.verify_chain().err() else {
+        panic!("expected payment receipt causality error");
+    };
+    assert!(reason.contains("only valid for settled status"));
     Ok(())
 }
 

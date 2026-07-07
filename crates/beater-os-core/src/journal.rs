@@ -10,7 +10,9 @@ use crate::contracts::{
 };
 use crate::error::{BeaterOsError, BeaterOsResult};
 use crate::hash::{GENESIS_HASH, HashValue, hash_json};
-use crate::receipt::{CapabilityReceipt, PaymentReceiptEvidence, ReceiptLedger};
+use crate::receipt::{
+    CapabilityReceipt, PaymentReceiptEvidence, PaymentSettlementStatus, ReceiptLedger,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -601,11 +603,7 @@ fn verify_event_causality(
             ReceiptLedger::from_receipts(state.receipt_chain.clone()).verify_chain()?;
         }
         JournalEvent::PaymentMandateIssued { mandate } => {
-            if state
-                .issued_mandates
-                .insert(mandate.mandate_id.clone(), mandate.clone())
-                .is_some()
-            {
+            if state.issued_mandates.contains_key(&mandate.mandate_id) {
                 return causality_error(
                     record.seq,
                     format!(
@@ -614,6 +612,10 @@ fn verify_event_causality(
                     ),
                 );
             }
+            validate_payment_mandate_event(record.seq, record.created_at, mandate, state)?;
+            state
+                .issued_mandates
+                .insert(mandate.mandate_id.clone(), mandate.clone());
         }
         JournalEvent::MemoryWritten { memory } => {
             validate_memory_source(
@@ -630,6 +632,128 @@ fn verify_event_causality(
         return causality_error(
             record.seq,
             format!("journal event id {event_id} was recorded more than once"),
+        );
+    }
+    Ok(())
+}
+
+fn validate_payment_mandate_event(
+    seq: u64,
+    created_at: chrono::DateTime<Utc>,
+    mandate: &PaymentMandate,
+    state: &CausalityState,
+) -> BeaterOsResult<()> {
+    match state.session_statuses.get(&mandate.session_id) {
+        Some(SessionStatus::Running) => {}
+        Some(status) => {
+            return causality_error(
+                seq,
+                format!(
+                    "payment mandate {} was issued while session {} was {status:?}",
+                    mandate.mandate_id, mandate.session_id
+                ),
+            );
+        }
+        None => {
+            return causality_error(
+                seq,
+                format!(
+                    "payment mandate {} references missing session {}",
+                    mandate.mandate_id, mandate.session_id
+                ),
+            );
+        }
+    }
+    for (field, value) in [
+        ("mandate_id", mandate.mandate_id.as_str()),
+        ("issuer", mandate.issuer.as_str()),
+        ("holder", mandate.holder.as_str()),
+        ("session_id", mandate.session_id.as_str()),
+        ("rail", mandate.rail.as_str()),
+        ("asset", mandate.asset.as_str()),
+        ("counterparty_policy", mandate.counterparty_policy.as_str()),
+        ("purpose", mandate.purpose.as_str()),
+        ("idempotency_key", mandate.idempotency_key.as_str()),
+        ("receipt_requirement", mandate.receipt_requirement.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return causality_error(
+                seq,
+                format!("payment mandate {} has empty {field}", mandate.mandate_id),
+            );
+        }
+    }
+    if mandate.max_minor_units == 0 {
+        return causality_error(
+            seq,
+            format!(
+                "payment mandate {} max_minor_units must be positive",
+                mandate.mandate_id
+            ),
+        );
+    }
+    if mandate.approval_threshold_minor_units > mandate.max_minor_units {
+        return causality_error(
+            seq,
+            format!(
+                "payment mandate {} approval threshold exceeds ceiling",
+                mandate.mandate_id
+            ),
+        );
+    }
+    if mandate.expires_at <= created_at {
+        return causality_error(
+            seq,
+            format!(
+                "payment mandate {} expires_at must be after issuance",
+                mandate.mandate_id
+            ),
+        );
+    }
+    if mandate.receipt_requirement != "required" {
+        return causality_error(
+            seq,
+            format!(
+                "payment mandate {} has unsupported receipt_requirement {:?}",
+                mandate.mandate_id, mandate.receipt_requirement
+            ),
+        );
+    }
+    if mandate.allowed_adapter_ids.is_empty()
+        || mandate
+            .allowed_adapter_ids
+            .iter()
+            .any(|adapter| adapter.trim().is_empty())
+    {
+        return causality_error(
+            seq,
+            format!(
+                "payment mandate {} requires explicit allowed_adapter_ids",
+                mandate.mandate_id
+            ),
+        );
+    }
+    if mandate.allowed_envelope_formats.is_empty()
+        || mandate
+            .allowed_envelope_formats
+            .iter()
+            .any(|format| format.trim().is_empty())
+    {
+        return causality_error(
+            seq,
+            format!(
+                "payment mandate {} requires explicit allowed_envelope_formats",
+                mandate.mandate_id
+            ),
+        );
+    }
+    if !valid_counterparty_policy(&mandate.counterparty_policy) {
+        return causality_error(
+            seq,
+            format!(
+                "payment mandate {} has invalid counterparty_policy",
+                mandate.mandate_id
+            ),
         );
     }
     Ok(())
@@ -766,6 +890,25 @@ fn validate_payment_receipt_evidence(
             "payment receipt evidence rail_receipt_hash must be lowercase 32-byte hex".to_string(),
         );
     }
+    match evidence.settlement_status {
+        PaymentSettlementStatus::Settled if evidence.settled_at.is_none() => {
+            return causality_error(
+                seq,
+                "payment receipt evidence settled status requires settled_at".to_string(),
+            );
+        }
+        PaymentSettlementStatus::Submitted
+        | PaymentSettlementStatus::Failed
+        | PaymentSettlementStatus::Canceled
+            if evidence.settled_at.is_some() =>
+        {
+            return causality_error(
+                seq,
+                "payment receipt evidence settled_at is only valid for settled status".to_string(),
+            );
+        }
+        _ => {}
+    }
     if let Some(settled_at) = evidence.settled_at
         && settled_at > created_at
     {
@@ -790,6 +933,26 @@ fn is_hex_64(value: &str) -> bool {
             .as_bytes()
             .iter()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_counterparty_policy(policy: &str) -> bool {
+    if policy == "any" {
+        return true;
+    }
+    if let Some(value) = policy.strip_prefix("exact:") {
+        return !value.is_empty();
+    }
+    if let Some(value) = policy.strip_prefix("prefix:") {
+        return !value.is_empty();
+    }
+    if let Some(value) = policy.strip_prefix("hash:") {
+        return is_hex_64(value);
+    }
+    if let Some(value) = policy.strip_prefix("allowlist:") {
+        let mut entries = value.split(',').map(str::trim).peekable();
+        return entries.peek().is_some() && entries.all(|entry| !entry.is_empty());
+    }
+    false
 }
 
 fn primary_event_id(record: &JournalRecord) -> Option<&str> {

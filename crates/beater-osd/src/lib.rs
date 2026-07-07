@@ -651,6 +651,12 @@ impl Store {
                     mandate.mandate_id, mandate.holder, admission_state.session.agent_id
                 )));
             }
+            if mandate.issuer.trim().is_empty() {
+                return Err(DaemonError::Refused(format!(
+                    "payment mandate {} issuer must not be empty",
+                    mandate.mandate_id
+                )));
+            }
             if admission_state.mandates.contains_key(&mandate.mandate_id) {
                 return Err(DaemonError::Refused(format!(
                     "payment mandate {} was already issued",
