@@ -1073,6 +1073,12 @@ impl Store {
                     request.action_id
                 )));
             }
+            if proposal.manifest.action_kind != ActionKind::Execute {
+                return Err(DaemonError::Refused(format!(
+                    "action {} is not an execute action and cannot receive a scheduler execution lease",
+                    request.action_id
+                )));
+            }
             let requested_wall_ms = proposal.manifest.requested_budget.max_wall_ms.ok_or_else(
                 || {
                     DaemonError::Refused(format!(
@@ -1321,12 +1327,6 @@ impl Store {
                     lease.action_id
                 ))
             })?;
-        if proposal.manifest.action_kind != ActionKind::Execute {
-            return Err(DaemonError::Refused(format!(
-                "action {} is not an execute action and cannot receive an execution lease",
-                lease.action_id
-            )));
-        }
         let manifest_hash = proposal.manifest.digest().map_err(DaemonError::from)?;
         if manifest_hash != decision.manifest_hash {
             return Err(DaemonError::Refused(format!(
