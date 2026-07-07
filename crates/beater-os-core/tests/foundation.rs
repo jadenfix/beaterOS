@@ -1916,6 +1916,12 @@ fn allowed_payment_journal(
 ) -> Result<InMemoryJournal, BeaterOsError> {
     let mut journal = InMemoryJournal::new();
     journal.append(
+        JournalEvent::SessionCreated {
+            session: session_fixture(SessionStatus::Running),
+        },
+        now,
+    )?;
+    journal.append(
         JournalEvent::PaymentMandateIssued {
             mandate: mandate_for_spend(now),
         },
