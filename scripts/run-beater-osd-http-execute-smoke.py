@@ -18,7 +18,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOKEN = "beateros-http-smoke-token"
 SESSION_ID = "http-exec-smoke-session"
-GRANT_ID = "http-exec-smoke-grant"
+GRANT_ID = f"{SESSION_ID}-root-grant"
 ACTION_ID = "http-exec-smoke-action"
 
 
