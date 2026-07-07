@@ -118,7 +118,7 @@ fn payment_mandate(session_id: &str) -> PaymentMandate {
         counterparty_policy: "prefix:vendor:".to_string(),
         purpose: "vendor payment".to_string(),
         expires_at: Utc::now() + TimeDelta::hours(1),
-        approval_threshold_minor_units: 10_000,
+        approval_threshold_minor_units: 100,
         idempotency_key: "pay-once".to_string(),
         receipt_requirement: "required".to_string(),
         allowed_adapter_ids: BTreeSet::from(["x402".to_string()]),
@@ -685,6 +685,46 @@ fn issued_payment_mandate_is_projected_into_admission() {
             .decision
             .matched_rules
             .contains(&"payment_authorized_by_mandate".to_string())
+    );
+}
+
+#[test]
+fn store_rejects_payment_mandate_with_implicit_adapter_allow_all() {
+    let (_root, store) = create_store_with_initial(
+        "payment-mandate-empty-adapters",
+        "sess_payment_empty_adapter",
+        ["grant-spend"],
+    );
+    let session_id = "sess_payment_empty_adapter";
+    let mut mandate = payment_mandate(session_id);
+    mandate.allowed_adapter_ids.clear();
+
+    let result = store.issue_payment_mandate(session_id, mandate, Utc::now());
+
+    assert!(
+        result
+            .err()
+            .is_some_and(|err| err.to_string().contains("allowed_adapter_ids"))
+    );
+}
+
+#[test]
+fn store_rejects_payment_mandate_threshold_above_ceiling() {
+    let (_root, store) = create_store_with_initial(
+        "payment-mandate-threshold-above-ceiling",
+        "sess_payment_bad_threshold",
+        ["grant-spend"],
+    );
+    let session_id = "sess_payment_bad_threshold";
+    let mut mandate = payment_mandate(session_id);
+    mandate.approval_threshold_minor_units = mandate.max_minor_units + 1;
+
+    let result = store.issue_payment_mandate(session_id, mandate, Utc::now());
+
+    assert!(
+        result
+            .err()
+            .is_some_and(|err| err.to_string().contains("threshold exceeds ceiling"))
     );
 }
 
