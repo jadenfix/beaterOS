@@ -255,7 +255,12 @@ fn manifest(session_id: &str, action_id: &str) -> ActionManifest {
         expected_outputs: Vec::new(),
         expected_side_effects: BTreeSet::from([SideEffectClass::LocalWrite]),
         required_grants: BTreeSet::from(["grant-write".to_string()]),
-        requested_budget: Budget::default(),
+        requested_budget: Budget {
+            max_model_cents: None,
+            max_tool_calls: None,
+            max_wall_ms: Some(10_000),
+            max_payment_minor_units: None,
+        },
         risk_class: RiskClass::Low,
         data_classes: BTreeSet::new(),
         taint: BTreeSet::new(),
@@ -842,6 +847,30 @@ fn public_receipt_append_cannot_backdate_expired_execution_lease() {
 
     assert!(
         matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("execution lease lease-backdate")),
+        "{result:?}"
+    );
+    assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
+}
+
+#[test]
+fn execute_receipt_requires_open_execution_lease() {
+    let (_root, store) = create_store_with_session("receipt-execute-no-lease", "sess_no_lease");
+    let session_id = "sess_no_lease";
+    let mut execute_grant = grant(session_id);
+    execute_grant.scope.actions = BTreeSet::from([ActionKind::Execute]);
+    append_grant(&store, session_id, execute_grant);
+    let mut execute_manifest = manifest(session_id, "act-execute-no-lease");
+    execute_manifest.action_kind = ActionKind::Execute;
+    store.admit_action(session_id, execute_manifest).unwrap();
+
+    let result = store.append_receipt(
+        session_id,
+        receipt_input("act-execute-no-lease"),
+        Utc::now(),
+    );
+
+    assert!(
+        matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("without an open execution lease")),
         "{result:?}"
     );
     assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);

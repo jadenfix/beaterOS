@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
-    ActionManifest, AgentSession, ApprovalEvidence, CapabilityGrant, DecisionResult,
+    ActionKind, ActionManifest, AgentSession, ApprovalEvidence, CapabilityGrant, DecisionResult,
     ExecutionLease, MemoryRecord, PaymentIntent, PaymentMandate, PolicyDecision, ScenarioManifest,
     SessionStatus, SideEffectClass, SimulationEvidence,
 };
@@ -624,61 +624,74 @@ fn verify_event_causality(
                     ),
                 );
             }
-            if let Some(lease) = state.open_execution_leases.remove(&receipt.action_id) {
-                if lease.tool_id != receipt.tool_id {
-                    return causality_error(
-                        record.seq,
-                        format!(
-                            "receipt {} tool {} does not match execution lease {} tool {}",
-                            receipt.receipt_id, receipt.tool_id, lease.lease_id, lease.tool_id
-                        ),
-                    );
-                }
-                if lease.target != receipt.target {
-                    return causality_error(
-                        record.seq,
-                        format!(
-                            "receipt {} target does not match execution lease {} target",
-                            receipt.receipt_id, lease.lease_id
-                        ),
-                    );
-                }
-                if receipt.started_at < lease.leased_at {
-                    return causality_error(
-                        record.seq,
-                        format!(
-                            "receipt {} started before execution lease {} was issued",
-                            receipt.receipt_id, lease.lease_id
-                        ),
-                    );
-                }
-                if receipt.finished_at > lease.expires_at {
-                    return causality_error(
-                        record.seq,
-                        format!(
-                            "receipt {} finished after execution lease {} expired",
-                            receipt.receipt_id, lease.lease_id
-                        ),
-                    );
-                }
-                if record.created_at > lease.expires_at {
-                    return causality_error(
-                        record.seq,
-                        format!(
-                            "receipt {} was journaled after execution lease {} expired",
-                            receipt.receipt_id, lease.lease_id
-                        ),
-                    );
-                }
-                if receipt.finished_at > record.created_at {
-                    return causality_error(
-                        record.seq,
-                        format!(
-                            "receipt {} finished after it was journaled",
-                            receipt.receipt_id
-                        ),
-                    );
-                }
+            let consumed_execution_lease =
+                if let Some(lease) = state.open_execution_leases.remove(&receipt.action_id) {
+                    if lease.tool_id != receipt.tool_id {
+                        return causality_error(
+                            record.seq,
+                            format!(
+                                "receipt {} tool {} does not match execution lease {} tool {}",
+                                receipt.receipt_id, receipt.tool_id, lease.lease_id, lease.tool_id
+                            ),
+                        );
+                    }
+                    if lease.target != receipt.target {
+                        return causality_error(
+                            record.seq,
+                            format!(
+                                "receipt {} target does not match execution lease {} target",
+                                receipt.receipt_id, lease.lease_id
+                            ),
+                        );
+                    }
+                    if receipt.started_at < lease.leased_at {
+                        return causality_error(
+                            record.seq,
+                            format!(
+                                "receipt {} started before execution lease {} was issued",
+                                receipt.receipt_id, lease.lease_id
+                            ),
+                        );
+                    }
+                    if receipt.finished_at > lease.expires_at {
+                        return causality_error(
+                            record.seq,
+                            format!(
+                                "receipt {} finished after execution lease {} expired",
+                                receipt.receipt_id, lease.lease_id
+                            ),
+                        );
+                    }
+                    if record.created_at > lease.expires_at {
+                        return causality_error(
+                            record.seq,
+                            format!(
+                                "receipt {} was journaled after execution lease {} expired",
+                                receipt.receipt_id, lease.lease_id
+                            ),
+                        );
+                    }
+                    if receipt.finished_at > record.created_at {
+                        return causality_error(
+                            record.seq,
+                            format!(
+                                "receipt {} finished after it was journaled",
+                                receipt.receipt_id
+                            ),
+                        );
+                    }
+                    true
+                } else {
+                    false
+                };
+            if manifest.action_kind == ActionKind::Execute && !consumed_execution_lease {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "receipt {} references execute action {} without an open execution lease",
+                        receipt.receipt_id, receipt.action_id
+                    ),
+                );
             }
             validate_payment_receipt(record.seq, record.created_at, manifest, receipt, state)?;
             state.receipted_actions.insert(receipt.action_id.clone());

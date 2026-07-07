@@ -41,6 +41,7 @@ const RECEIPTS_FILE: &str = "receipts.jsonl";
 const TOOL_REGISTRY_FILE: &str = "tool-registry.json";
 const TOOL_REGISTRY_LOCK: &str = "tool-registry.lock";
 const LOCK_SUFFIX: &str = ".lock";
+const EXECUTION_LEASE_OVERHEAD_GRACE_MS: u64 = 2_000;
 /// Policy contract version enforced by daemon-owned authority writes.
 pub const DAEMON_POLICY_VERSION: &str = "beateros-policy-v0";
 
@@ -885,6 +886,34 @@ impl Store {
         if lease_window <= TimeDelta::zero() {
             return Err(DaemonError::Refused(format!(
                 "execution lease {} has a non-positive duration",
+                lease.lease_id
+            ))
+            .into());
+        }
+        let requested_wall_ms = lease.requested_budget.max_wall_ms.ok_or_else(|| {
+            DaemonError::Refused(format!(
+                "execution lease {} must declare finite requested wall budget",
+                lease.lease_id
+            ))
+        })?;
+        let max_lease_ms = requested_wall_ms
+            .checked_add(EXECUTION_LEASE_OVERHEAD_GRACE_MS)
+            .ok_or_else(|| {
+                DaemonError::Refused(format!(
+                    "execution lease {} duration overflowed requested wall budget",
+                    lease.lease_id
+                ))
+            })?;
+        let max_lease_window =
+            TimeDelta::milliseconds(i64::try_from(max_lease_ms).map_err(|_| {
+                DaemonError::Refused(format!(
+                    "execution lease {} duration cannot fit signed milliseconds",
+                    lease.lease_id
+                ))
+            })?);
+        if lease_window > max_lease_window {
+            return Err(DaemonError::Refused(format!(
+                "execution lease {} duration exceeds requested wall budget plus daemon overhead grace",
                 lease.lease_id
             ))
             .into());
