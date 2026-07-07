@@ -103,6 +103,10 @@ review boundaries.
     and removed from the runnable queue.
 - `scripts/run-beater-osd-http-execute-smoke.py`
   - Token-gated daemon HTTP execution smoke over the local shell gateway.
+- `scripts/run-beater-osd-http-pending-worker-smoke.py`
+  - Token-gated HTTP proof that a pre-admitted runnable action dispatches
+    through the existing-action path, claims a daemon lease, executes via the
+    gateway, completes a receipt, and drains from the runnable queue.
 - `scripts/run-beater-osd-http-claims-smoke.py`
   - Token-gated daemon HTTP scheduler claim/complete smoke covering pinned
     tool compare-and-set refusal, exact lease-id completion, and journal
