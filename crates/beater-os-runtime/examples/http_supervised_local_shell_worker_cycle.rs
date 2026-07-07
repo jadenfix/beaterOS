@@ -167,16 +167,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .into());
     }
-    if live_response.body["recoveries"]
+    if !live_response.body["recoveries"]
         .as_array()
         .ok_or("live recoveries must be an array")?
-        .len()
-        != 0
-        || live_response.body["worker_loop"]["executions"]
+        .is_empty()
+        || !live_response.body["worker_loop"]["executions"]
             .as_array()
             .ok_or("live executions must be an array")?
-            .len()
-            != 0
+            .is_empty()
         || live_response.body["worker_loop"]["stop_reason"] != "recovery_blocked"
         || live_response.body["projection"]["open_execution_leases"] != 1
     {
