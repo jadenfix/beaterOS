@@ -10,10 +10,10 @@ use std::time::Duration;
 
 use beater_os_core::{
     ActionKind, ActionManifest, AgentSession, ApprovalEvidence, ApprovalMode, ApprovalRequirement,
-    Budget, CapabilityGrant, CapabilityReceiptInput, CapabilityScope, CapabilitySelector,
-    DataClass, DecisionResult, DelegationMode, GrantConstraints, JournalEvent, PaymentIntent,
-    PaymentMandate, PolicyDecision, ResourceKind, RiskClass, SessionStatus, SideEffectClass,
-    SimulationEvidence, ToolManifest,
+    BeaterOsError, Budget, CapabilityGrant, CapabilityReceiptInput, CapabilityScope,
+    CapabilitySelector, DataClass, DecisionResult, DelegationMode, GrantConstraints, JournalEvent,
+    PaymentIntent, PaymentMandate, PaymentReceiptEvidence, PaymentSettlementStatus, PolicyDecision,
+    ResourceKind, RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, ToolManifest,
 };
 use beater_osd::{DaemonError, SessionTransition, Store, StoreOptions};
 use chrono::{TimeDelta, Utc};
@@ -283,6 +283,56 @@ fn receipt_input(action_id: &str) -> CapabilityReceiptInput {
         side_effects: Vec::new(),
         external_ids: Vec::new(),
         artifact_refs: Vec::new(),
+        payment_receipt: None,
+    }
+}
+
+fn payment_receipt_input(manifest: &ActionManifest) -> CapabilityReceiptInput {
+    let now = Utc::now();
+    CapabilityReceiptInput {
+        receipt_id: Some(format!("receipt-{}", manifest.action_id)),
+        action_id: manifest.action_id.clone(),
+        tool_id: manifest.tool_id.clone(),
+        target: manifest.target.clone(),
+        started_at: now,
+        finished_at: now,
+        status: "settled".to_string(),
+        input_digest: manifest.inputs_digest.clone(),
+        output_digest: "payment-output-digest".to_string(),
+        side_effect_summary: "settled payment".to_string(),
+        side_effects: vec![SideEffectClass::Payment],
+        external_ids: vec!["rail:receipt:runtime".to_string()],
+        artifact_refs: Vec::new(),
+        payment_receipt: Some(Box::new(payment_receipt_evidence(manifest, now))),
+    }
+}
+
+fn payment_receipt_evidence(
+    manifest: &ActionManifest,
+    settled_at: chrono::DateTime<Utc>,
+) -> PaymentReceiptEvidence {
+    let intent = manifest
+        .payment_intent
+        .as_ref()
+        .unwrap_or_else(|| panic!("payment fixture requires payment_intent"));
+    PaymentReceiptEvidence {
+        manifest_hash: manifest.digest().unwrap(),
+        mandate_id: intent.mandate_id.clone(),
+        rail: intent.rail.clone(),
+        adapter_id: intent.adapter_id.clone(),
+        adapter_version: intent.adapter_version.clone(),
+        asset: intent.asset.clone(),
+        amount_minor_units: intent.amount_minor_units,
+        counterparty_ref: intent.counterparty_ref.clone(),
+        counterparty_binding_hash: intent.counterparty_binding_hash.clone(),
+        purpose: intent.purpose.clone(),
+        payment_idempotency_key: intent.payment_idempotency_key.clone(),
+        envelope_format: intent.envelope_format.clone(),
+        envelope_hash: intent.envelope_hash.clone(),
+        rail_receipt_hash: "6666666666666666666666666666666666666666666666666666666666666666"
+            .to_string(),
+        settlement_status: PaymentSettlementStatus::Settled,
+        settled_at: Some(settled_at),
     }
 }
 
@@ -771,6 +821,73 @@ fn durable_approval_satisfies_payment_mandate_threshold() {
         .unwrap();
     let second = store.admit_action(session_id, manifest).unwrap();
     assert_eq!(second.decision.result, DecisionResult::NeedsSimulation);
+}
+
+fn admit_allowed_payment(store: &Store, session_id: &str, manifest: &ActionManifest) {
+    store
+        .issue_grant(session_id, payment_grant(session_id), Utc::now())
+        .unwrap();
+    store
+        .issue_payment_mandate(session_id, payment_mandate(session_id), Utc::now())
+        .unwrap();
+    let first = store.admit_action(session_id, manifest.clone()).unwrap();
+    assert_eq!(first.decision.result, DecisionResult::NeedsSimulation);
+    store
+        .record_simulation(session_id, simulation_for(manifest), Utc::now())
+        .unwrap();
+    let second = store.admit_action(session_id, manifest.clone()).unwrap();
+    assert_eq!(second.decision.result, DecisionResult::Allowed);
+}
+
+#[test]
+fn required_payment_receipt_cannot_be_satisfied_by_external_ids_only() {
+    let (_root, store) = create_store_with_initial(
+        "payment-receipt-required",
+        "sess_payment_receipt_required",
+        ["grant-spend"],
+    );
+    let session_id = "sess_payment_receipt_required";
+    let manifest = payment_manifest(session_id, "act-pay-receipt-missing");
+    admit_allowed_payment(&store, session_id, &manifest);
+
+    let before = store.load_journal(session_id).unwrap().records().len();
+    let mut input = payment_receipt_input(&manifest);
+    input.payment_receipt = None;
+    input.external_ids = vec!["rail:receipt:external-only".to_string()];
+    let result = store.append_receipt(session_id, input, Utc::now());
+
+    assert!(
+        matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("missing required typed payment evidence")),
+        "{result:?}"
+    );
+    let after = store.load_journal(session_id).unwrap().records().len();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn required_payment_receipt_with_typed_evidence_persists() {
+    let (_root, store) = create_store_with_initial(
+        "payment-receipt-valid",
+        "sess_payment_receipt_valid",
+        ["grant-spend"],
+    );
+    let session_id = "sess_payment_receipt_valid";
+    let manifest = payment_manifest(session_id, "act-pay-receipt-valid");
+    admit_allowed_payment(&store, session_id, &manifest);
+
+    let receipt = store
+        .append_receipt(session_id, payment_receipt_input(&manifest), Utc::now())
+        .unwrap();
+
+    let projection = store.project(session_id).unwrap();
+    assert_eq!(projection.receipts.len(), 1);
+    assert_eq!(projection.receipts[0].receipt_id, receipt.receipt_id);
+    assert!(projection.receipts[0].payment_receipt.is_some());
+    store
+        .load_journal(session_id)
+        .unwrap()
+        .verify_chain()
+        .unwrap();
 }
 
 #[test]

@@ -143,6 +143,7 @@ fn receipt(id: &str, manifest: &ActionManifest) -> Result<CapabilityReceipt, Bea
         side_effects: Vec::new(),
         external_ids: Vec::new(),
         artifact_refs: Vec::new(),
+        payment_receipt: None,
     })
 }
 

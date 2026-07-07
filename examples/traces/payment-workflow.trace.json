@@ -176,7 +176,25 @@
       "external_ids": [
         "stripe:ch_test_4471"
       ],
-      "receipt_hash": "2ff41c8d206532028b27716409989e15552c6b90c28d0d1220311e331af917e4"
+      "payment_receipt": {
+        "manifest_hash": "0938b80541484958459f8b294d0b5311c23c35f81d5f0c95b88ef6ee5c83d9f4",
+        "mandate_id": "mandate-vendor",
+        "rail": "stripe",
+        "adapter_id": "stripe",
+        "adapter_version": "2026-07",
+        "asset": "USD",
+        "amount_minor_units": 6200,
+        "counterparty_ref": "vendor:4471",
+        "counterparty_binding_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+        "purpose": "Settle approved vendor invoices.",
+        "payment_idempotency_key": "idem-pay-invoice",
+        "envelope_format": "stripe-payment-intent-v1",
+        "envelope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+        "rail_receipt_hash": "6666666666666666666666666666666666666666666666666666666666666666",
+        "settlement_status": "settled",
+        "settled_at": "2026-07-03T09:02:00Z"
+      },
+      "receipt_hash": "76ae1dcb4bdc759e7d0c3ed88861a868ee503f7aee229b4b7dd20b3bf70b1a79"
     }
   ],
   "journal": [
@@ -212,6 +230,36 @@
     },
     {
       "seq": 1,
+      "created_at": "2026-07-03T09:00:00Z",
+      "event": {
+        "kind": "payment_mandate_issued",
+        "mandate": {
+          "mandate_id": "mandate-vendor",
+          "issuer": "user:jaden",
+          "holder": "agent:ap-1",
+          "session_id": "sess-pay-001",
+          "rail": "stripe",
+          "asset": "USD",
+          "max_minor_units": 100000,
+          "counterparty_policy": "prefix:vendor:",
+          "purpose": "Settle approved vendor invoices.",
+          "expires_at": "2026-07-03T12:00:00Z",
+          "approval_threshold_minor_units": 5000,
+          "idempotency_key": "idem-pay-invoice",
+          "receipt_requirement": "required",
+          "allowed_adapter_ids": [
+            "stripe"
+          ],
+          "allowed_envelope_formats": [
+            "stripe-payment-intent-v1"
+          ]
+        }
+      },
+      "prev_hash": "e2000ce593266bb364a8aff6572347a254dbc5299e64af6a33ab368857719f63",
+      "hash": "d3dc43050ad28e12503b192018daa299d5eb3173eab325926a6643faa9acb321"
+    },
+    {
+      "seq": 2,
       "created_at": "2026-07-03T09:00:00Z",
       "event": {
         "kind": "capability_granted",
@@ -250,11 +298,11 @@
           "reason": "Pay approved vendor invoices via the standing mandate."
         }
       },
-      "prev_hash": "e2000ce593266bb364a8aff6572347a254dbc5299e64af6a33ab368857719f63",
-      "hash": "cdf22fe8c81460b568d360f5adea4a98a76ea3b51db8579d6d51205d4e249ee7"
+      "prev_hash": "d3dc43050ad28e12503b192018daa299d5eb3173eab325926a6643faa9acb321",
+      "hash": "7963f0bd7421011dc90351987d64eda96d6b3687850c5eacbfb5e506262606e1"
     },
     {
-      "seq": 2,
+      "seq": 3,
       "created_at": "2026-07-03T09:01:00Z",
       "event": {
         "kind": "action_proposed",
@@ -304,11 +352,11 @@
           "human_explanation": "Pay the approved vendor invoice #4471."
         }
       },
-      "prev_hash": "cdf22fe8c81460b568d360f5adea4a98a76ea3b51db8579d6d51205d4e249ee7",
-      "hash": "45b4cf1175848db296906e90872ad4e2b7d0c0025bb205037ce2f5dfe9ccd99e"
+      "prev_hash": "7963f0bd7421011dc90351987d64eda96d6b3687850c5eacbfb5e506262606e1",
+      "hash": "025cb0a7e8ad2db22e94d30fe599f80571718b66c3d32272851dcc1a9617e76e"
     },
     {
-      "seq": 3,
+      "seq": 4,
       "created_at": "2026-07-03T09:02:00Z",
       "event": {
         "kind": "policy_decided",
@@ -322,11 +370,11 @@
           "created_at": "2026-07-03T09:02:00Z"
         }
       },
-      "prev_hash": "45b4cf1175848db296906e90872ad4e2b7d0c0025bb205037ce2f5dfe9ccd99e",
-      "hash": "d3522a9af85d883452da26218d8c34f029816ea9ee9ba7c5426ef4ceef47c0db"
+      "prev_hash": "025cb0a7e8ad2db22e94d30fe599f80571718b66c3d32272851dcc1a9617e76e",
+      "hash": "91a07eb8de57a75829a5a66223c123dc451caf6fed8a5573ab647d523cc4b4ae"
     },
     {
-      "seq": 4,
+      "seq": 5,
       "created_at": "2026-07-03T09:02:00Z",
       "event": {
         "kind": "receipt_appended",
@@ -352,11 +400,29 @@
           "external_ids": [
             "stripe:ch_test_4471"
           ],
-          "receipt_hash": "2ff41c8d206532028b27716409989e15552c6b90c28d0d1220311e331af917e4"
+          "payment_receipt": {
+            "manifest_hash": "0938b80541484958459f8b294d0b5311c23c35f81d5f0c95b88ef6ee5c83d9f4",
+            "mandate_id": "mandate-vendor",
+            "rail": "stripe",
+            "adapter_id": "stripe",
+            "adapter_version": "2026-07",
+            "asset": "USD",
+            "amount_minor_units": 6200,
+            "counterparty_ref": "vendor:4471",
+            "counterparty_binding_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+            "purpose": "Settle approved vendor invoices.",
+            "payment_idempotency_key": "idem-pay-invoice",
+            "envelope_format": "stripe-payment-intent-v1",
+            "envelope_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+            "rail_receipt_hash": "6666666666666666666666666666666666666666666666666666666666666666",
+            "settlement_status": "settled",
+            "settled_at": "2026-07-03T09:02:00Z"
+          },
+          "receipt_hash": "76ae1dcb4bdc759e7d0c3ed88861a868ee503f7aee229b4b7dd20b3bf70b1a79"
         }
       },
-      "prev_hash": "d3522a9af85d883452da26218d8c34f029816ea9ee9ba7c5426ef4ceef47c0db",
-      "hash": "0a2c93743b031b990ef0a47a3c617691960d5dab882b0df0864be7a1f7d70c6d"
+      "prev_hash": "91a07eb8de57a75829a5a66223c123dc451caf6fed8a5573ab647d523cc4b4ae",
+      "hash": "902f30c0da5bc84748009eafce7b8021986319f9a71773a2c2308467c6100603"
     }
   ]
 }

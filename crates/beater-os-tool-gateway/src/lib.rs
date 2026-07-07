@@ -352,6 +352,7 @@ pub fn execute_local_tool(
                     side_effects: certified_effects,
                     external_ids: vec![format!("tool_ref={receipt_tool_ref}")],
                     artifact_refs,
+                    payment_receipt: None,
                 },
                 execution,
             ))

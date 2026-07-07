@@ -5,9 +5,9 @@ use beater_os_core::{
     ApprovalRequirement, BeaterOsError, Budget, CapabilityGrant, CapabilityReceipt,
     CapabilityReceiptInput, CapabilityScope, CapabilitySelector, DataClass, DecisionResult,
     DelegationMode, GrantConstraints, HashValue, InMemoryJournal, JournalEvent, MemoryRecord,
-    PaymentIntent, PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind,
-    RiskClass, SessionStatus, SideEffectClass, SimulationEvidence, TaintLabel, ToolManifest,
-    hash_json,
+    PaymentIntent, PaymentMandate, PaymentReceiptEvidence, PaymentSettlementStatus, PolicyDecision,
+    PolicyEngine, ReceiptLedger, ResourceKind, RiskClass, SessionStatus, SideEffectClass,
+    SimulationEvidence, TaintLabel, ToolManifest, hash_json,
 };
 use chrono::{Duration, TimeZone, Utc};
 use serde::Serialize;
@@ -944,6 +944,40 @@ fn policy_payment_threshold_is_exclusive_above_the_configured_amount() {
 }
 
 #[test]
+fn policy_denies_payment_with_unsupported_receipt_requirement() {
+    let now = fixed_time();
+    let mut mandate = mandate_for_spend(now);
+    mandate.receipt_requirement = "external-id-only".to_string();
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate];
+
+    let decision = admit(&spend_manifest(), &ctx);
+
+    assert_eq!(decision.result, DecisionResult::Denied);
+    assert!(
+        decision.explanation.contains("receipt_requirement"),
+        "{}",
+        decision.explanation
+    );
+}
+
+#[test]
+fn policy_checks_required_payment_receipt_without_pre_execution_gate() {
+    let now = fixed_time();
+    let mut ctx = admission_context(now, vec![grant_spend(now)]);
+    ctx.mandates = vec![mandate_for_spend(now)];
+
+    let decision = admit(&spend_manifest(), &ctx);
+
+    assert_eq!(decision.result, DecisionResult::NeedsSimulation);
+    assert!(
+        decision
+            .matched_rules
+            .contains(&"payment_mandate_receipt_requirement_checked".to_string())
+    );
+}
+
+#[test]
 fn policy_accepts_action_bound_grant_approval_for_payment_mandate_threshold() {
     let now = fixed_time();
     let manifest = spend_manifest();
@@ -1716,8 +1750,64 @@ fn receipt_for_manifest(
             side_effects: manifest.expected_side_effects.iter().copied().collect(),
             external_ids: Vec::new(),
             artifact_refs: Vec::new(),
+            payment_receipt: None,
         })
         .unwrap_or_else(|err| panic!("receipt fixture should be valid: {err}"))
+}
+
+fn payment_receipt_evidence(manifest: &ActionManifest) -> PaymentReceiptEvidence {
+    let intent = manifest
+        .payment_intent
+        .as_ref()
+        .unwrap_or_else(|| panic!("payment receipt fixture requires payment_intent"));
+    PaymentReceiptEvidence {
+        manifest_hash: manifest_hash(manifest),
+        mandate_id: intent.mandate_id.clone(),
+        rail: intent.rail.clone(),
+        adapter_id: intent.adapter_id.clone(),
+        adapter_version: intent.adapter_version.clone(),
+        asset: intent.asset.clone(),
+        amount_minor_units: intent.amount_minor_units,
+        counterparty_ref: intent.counterparty_ref.clone(),
+        counterparty_binding_hash: intent.counterparty_binding_hash.clone(),
+        purpose: intent.purpose.clone(),
+        payment_idempotency_key: intent.payment_idempotency_key.clone(),
+        envelope_format: intent.envelope_format.clone(),
+        envelope_hash: intent.envelope_hash.clone(),
+        rail_receipt_hash: "6666666666666666666666666666666666666666666666666666666666666666"
+            .to_string(),
+        settlement_status: PaymentSettlementStatus::Settled,
+        settled_at: Some(fixed_time()),
+    }
+}
+
+fn payment_receipt_for_manifest(
+    manifest: &ActionManifest,
+    now: chrono::DateTime<Utc>,
+    evidence: Option<PaymentReceiptEvidence>,
+) -> CapabilityReceipt {
+    let mut ledger = ReceiptLedger::new();
+    ledger
+        .append(CapabilityReceiptInput {
+            receipt_id: Some(format!("receipt-{}", manifest.action_id)),
+            action_id: manifest.action_id.clone(),
+            tool_id: manifest.tool_id.clone(),
+            target: manifest
+                .resolved_target
+                .clone()
+                .unwrap_or_else(|| manifest.target.clone()),
+            started_at: now,
+            finished_at: now + Duration::milliseconds(10),
+            status: "settled".to_string(),
+            input_digest: manifest.inputs_digest.clone(),
+            output_digest: "sha256:payment-out".to_string(),
+            side_effect_summary: "settled payment".to_string(),
+            side_effects: vec![SideEffectClass::Payment],
+            external_ids: vec!["rail:receipt:fixture".to_string()],
+            artifact_refs: Vec::new(),
+            payment_receipt: evidence.map(Box::new),
+        })
+        .unwrap_or_else(|err| panic!("payment receipt fixture should be valid: {err}"))
 }
 
 fn memory_record(
@@ -1816,6 +1906,108 @@ fn journal_accepts_receipt_after_prior_allowed_decision() -> Result<(), Box<dyn 
     )?;
     journal.append(JournalEvent::ReceiptAppended { receipt }, now)?;
     assert!(journal.verify_chain().is_ok());
+    Ok(())
+}
+
+fn allowed_payment_journal(
+    manifest: ActionManifest,
+    receipt: CapabilityReceipt,
+    now: chrono::DateTime<Utc>,
+) -> Result<InMemoryJournal, BeaterOsError> {
+    let mut journal = InMemoryJournal::new();
+    journal.append(
+        JournalEvent::PaymentMandateIssued {
+            mandate: mandate_for_spend(now),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::ActionProposed {
+            manifest: Box::new(manifest.clone()),
+        },
+        now,
+    )?;
+    journal.append(
+        JournalEvent::PolicyDecided {
+            decision: PolicyDecision {
+                decision_id: format!("decision-{}", manifest.action_id),
+                action_id: manifest.action_id.clone(),
+                manifest_hash: manifest_hash(&manifest),
+                policy_version: "policy-v1".to_string(),
+                result: DecisionResult::Allowed,
+                matched_rules: Vec::new(),
+                explanation: "allowed in fixture".to_string(),
+                required_review: None,
+                required_simulation: None,
+                created_at: now,
+            },
+        },
+        now,
+    )?;
+    journal.append(JournalEvent::ReceiptAppended { receipt }, now)?;
+    Ok(journal)
+}
+
+#[test]
+fn journal_accepts_required_payment_receipt_with_typed_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let manifest = spend_manifest();
+    let receipt =
+        payment_receipt_for_manifest(&manifest, now, Some(payment_receipt_evidence(&manifest)));
+    let journal = allowed_payment_journal(manifest, receipt, now)?;
+
+    journal.verify_chain()?;
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_required_payment_receipt_without_typed_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let manifest = spend_manifest();
+    let receipt = payment_receipt_for_manifest(&manifest, now, None);
+    let journal = allowed_payment_journal(manifest, receipt, now)?;
+
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = journal.verify_chain().err() else {
+        panic!("expected payment receipt causality error");
+    };
+    assert!(reason.contains("missing required typed payment evidence"));
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_payment_receipt_with_stale_manifest_hash()
+-> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let manifest = spend_manifest();
+    let mut evidence = payment_receipt_evidence(&manifest);
+    evidence.manifest_hash =
+        "7777777777777777777777777777777777777777777777777777777777777777".to_string();
+    let receipt = payment_receipt_for_manifest(&manifest, now, Some(evidence));
+    let journal = allowed_payment_journal(manifest, receipt, now)?;
+
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = journal.verify_chain().err() else {
+        panic!("expected payment receipt causality error");
+    };
+    assert!(reason.contains("manifest_hash"));
+    Ok(())
+}
+
+#[test]
+fn journal_rejects_payment_receipt_with_invalid_rail_receipt_hash()
+-> Result<(), Box<dyn std::error::Error>> {
+    let now = fixed_time();
+    let manifest = spend_manifest();
+    let mut evidence = payment_receipt_evidence(&manifest);
+    evidence.rail_receipt_hash = "not-a-rail-receipt-hash".to_string();
+    let receipt = payment_receipt_for_manifest(&manifest, now, Some(evidence));
+    let journal = allowed_payment_journal(manifest, receipt, now)?;
+
+    let Some(BeaterOsError::JournalCausality { reason, .. }) = journal.verify_chain().err() else {
+        panic!("expected payment receipt causality error");
+    };
+    assert!(reason.contains("rail_receipt_hash"));
     Ok(())
 }
 
@@ -2018,6 +2210,7 @@ fn receipt_ledger_detects_reordered_or_edited_receipts() -> Result<(), Box<dyn s
         side_effects: vec![SideEffectClass::LocalWrite],
         external_ids: Vec::new(),
         artifact_refs: vec!["diff:1".to_string()],
+        payment_receipt: None,
     })?;
     ledger.append(CapabilityReceiptInput {
         receipt_id: Some("receipt-2".to_string()),
@@ -2036,6 +2229,7 @@ fn receipt_ledger_detects_reordered_or_edited_receipts() -> Result<(), Box<dyn s
         side_effects: vec![SideEffectClass::None],
         external_ids: Vec::new(),
         artifact_refs: Vec::new(),
+        payment_receipt: None,
     })?;
     ledger.verify_chain()?;
 

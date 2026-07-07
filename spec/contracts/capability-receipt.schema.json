@@ -44,6 +44,45 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "payment_receipt": {
+      "description": "Typed payment-rail receipt evidence required when a PaymentMandate has receipt_requirement=required.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest_hash",
+        "mandate_id",
+        "rail",
+        "adapter_id",
+        "asset",
+        "amount_minor_units",
+        "counterparty_ref",
+        "counterparty_binding_hash",
+        "purpose",
+        "payment_idempotency_key",
+        "envelope_format",
+        "envelope_hash",
+        "rail_receipt_hash",
+        "settlement_status"
+      ],
+      "properties": {
+        "manifest_hash": { "$ref": "common.schema.json#/$defs/HashValue" },
+        "mandate_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+        "rail": { "type": "string", "minLength": 1 },
+        "adapter_id": { "$ref": "common.schema.json#/$defs/Identifier" },
+        "adapter_version": { "type": "string", "minLength": 1 },
+        "asset": { "type": "string", "minLength": 1 },
+        "amount_minor_units": { "$ref": "common.schema.json#/$defs/MinorUnits" },
+        "counterparty_ref": { "type": "string", "minLength": 1 },
+        "counterparty_binding_hash": { "$ref": "common.schema.json#/$defs/HashValue" },
+        "purpose": { "type": "string", "minLength": 1 },
+        "payment_idempotency_key": { "$ref": "common.schema.json#/$defs/Identifier" },
+        "envelope_format": { "type": "string", "minLength": 1 },
+        "envelope_hash": { "$ref": "common.schema.json#/$defs/HashValue" },
+        "rail_receipt_hash": { "$ref": "common.schema.json#/$defs/HashValue" },
+        "settlement_status": { "enum": ["submitted", "settled", "failed", "canceled"] },
+        "settled_at": { "$ref": "common.schema.json#/$defs/Timestamp" }
+      }
+    },
     "prev_receipt_hash": { "$ref": "common.schema.json#/$defs/HashValue" },
     "receipt_hash": { "$ref": "common.schema.json#/$defs/HashValue" }
   }

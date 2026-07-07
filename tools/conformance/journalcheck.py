@@ -63,6 +63,7 @@ def verify_journal_chain(records: list[dict]) -> list[str]:
     event_ids: set[str] = set()
     grants: dict[str, dict] = {}
     revoked_handles: set[str] = set()
+    mandates: dict[str, dict] = {}
     proposed: dict[str, dict] = {}
     allowed: dict[str, str] = {}
     latest_decision: dict[str, str] = {}
@@ -88,6 +89,7 @@ def verify_journal_chain(records: list[dict]) -> list[str]:
                 event_ids,
                 grants,
                 revoked_handles,
+                mandates,
                 proposed,
                 allowed,
                 latest_decision,
@@ -110,6 +112,7 @@ def _causality(
     event_ids: set[str],
     grants: dict[str, dict],
     revoked_handles: set[str],
+    mandates: dict[str, dict],
     proposed: dict[str, dict],
     allowed: dict[str, str],
     latest_decision: dict[str, str],
@@ -195,6 +198,13 @@ def _causality(
             errors.append(f"journal[{idx}] revocation handle {handle} appears more than once")
         revoked_handles.add(handle)
 
+    elif kind == "payment_mandate_issued":
+        mandate = event["mandate"]
+        mid = mandate["mandate_id"]
+        if mid in mandates:
+            errors.append(f"journal[{idx}] payment mandate {mid} issued more than once")
+        mandates[mid] = mandate
+
     elif kind == "policy_decided":
         decision = event["decision"]
         aid = decision["action_id"]
@@ -272,6 +282,7 @@ def _causality(
                 f"journal[{idx}] receipt {receipt['receipt_id']} has undeclared side effects: "
                 f"{sorted(extra)}"
             )
+        errors.extend(_payment_receipt_errors(idx, receipt, manifest, mandates))
 
     elif kind == "memory_written":
         memory = event["memory"]
@@ -285,6 +296,101 @@ def _causality(
             )
 
     return errors
+
+
+def _payment_receipt_errors(
+    idx: int,
+    receipt: dict,
+    manifest: dict,
+    mandates: dict[str, dict],
+) -> list[str]:
+    errors: list[str] = []
+    is_payment = (
+        manifest.get("action_kind") == "spend"
+        or "payment" in set(manifest.get("expected_side_effects", []))
+    )
+    evidence = receipt.get("payment_receipt")
+    if not is_payment:
+        if evidence is not None:
+            errors.append(
+                f"journal[{idx}] receipt {receipt['receipt_id']} carries payment_receipt "
+                f"for non-payment action {manifest['action_id']}"
+            )
+        return errors
+
+    if "payment" not in set(receipt.get("side_effects", [])):
+        errors.append(
+            f"journal[{idx}] payment receipt {receipt['receipt_id']} does not report payment side effect"
+        )
+    intent = manifest.get("payment_intent")
+    if intent is None:
+        errors.append(
+            f"journal[{idx}] payment receipt {receipt['receipt_id']} references action "
+            f"{manifest['action_id']} without payment_intent"
+        )
+        return errors
+    mandate = mandates.get(intent.get("mandate_id", ""))
+    if mandate is None:
+        errors.append(
+            f"journal[{idx}] payment receipt {receipt['receipt_id']} references mandate "
+            f"{intent.get('mandate_id')} before it was issued"
+        )
+        return errors
+    requirement = mandate.get("receipt_requirement")
+    if requirement != "required":
+        errors.append(
+            f"journal[{idx}] payment mandate {mandate['mandate_id']} has unsupported "
+            f"receipt_requirement {requirement!r}"
+        )
+        return errors
+    if evidence is None:
+        errors.append(
+            f"journal[{idx}] payment receipt {receipt['receipt_id']} is missing typed payment evidence"
+        )
+        return errors
+
+    if evidence.get("manifest_hash") != sha256_hex(manifest):
+        errors.append(
+            f"journal[{idx}] payment receipt evidence manifest_hash != action digest"
+        )
+    for key in (
+        "mandate_id",
+        "rail",
+        "adapter_id",
+        "adapter_version",
+        "asset",
+        "amount_minor_units",
+        "counterparty_ref",
+        "counterparty_binding_hash",
+        "purpose",
+        "payment_idempotency_key",
+        "envelope_format",
+        "envelope_hash",
+    ):
+        if evidence.get(key) != intent.get(key):
+            errors.append(
+                f"journal[{idx}] payment receipt evidence {key} != payment_intent {key}"
+            )
+    if evidence.get("rail") != mandate.get("rail"):
+        errors.append(f"journal[{idx}] payment receipt evidence rail != mandate rail")
+    if evidence.get("asset") != mandate.get("asset"):
+        errors.append(f"journal[{idx}] payment receipt evidence asset != mandate asset")
+    if evidence.get("purpose") != mandate.get("purpose"):
+        errors.append(f"journal[{idx}] payment receipt evidence purpose != mandate purpose")
+    if evidence.get("payment_idempotency_key") != mandate.get("idempotency_key"):
+        errors.append(
+            f"journal[{idx}] payment receipt evidence idempotency key != mandate idempotency key"
+        )
+    rail_receipt_hash = evidence.get("rail_receipt_hash", "")
+    if not isinstance(rail_receipt_hash, str) or not _is_lower_hex_64(rail_receipt_hash):
+        errors.append(
+            f"journal[{idx}] payment receipt evidence rail_receipt_hash is not lowercase 32-byte hex"
+        )
+    return errors
+
+
+def _is_lower_hex_64(value: str) -> bool:
+    return len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)
 
 
 def _valid_session_transition(from_status: str, to_status: str) -> bool:
