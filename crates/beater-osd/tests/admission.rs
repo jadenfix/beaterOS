@@ -786,6 +786,56 @@ fn open_execution_lease_blocks_reexecution_after_callback_failure() {
 }
 
 #[test]
+fn split_execution_lease_completion_requires_exact_open_lease_id() {
+    let (_root, store) = create_store_with_session("execute-split-lease", "sess_split_lease");
+    let session_id = "sess_split_lease";
+    append_grant(&store, session_id, grant(session_id));
+    let execute_manifest = manifest(session_id, "act-split-lease");
+    let admission = store
+        .admit_action(session_id, execute_manifest.clone())
+        .unwrap();
+    let lease = execution_lease_for(&execute_manifest, &admission.decision, "lease-split");
+
+    let claim = store
+        .claim_execution_lease(session_id, lease, Utc::now())
+        .unwrap();
+    assert_eq!(claim.lease.lease_id, "lease-split");
+    assert_eq!(store.open_execution_leases(session_id).unwrap().len(), 1);
+
+    let legacy_append =
+        store.append_receipt(session_id, receipt_input("act-split-lease"), Utc::now());
+    assert!(
+        matches!(legacy_append, Err(DaemonError::Refused(ref message)) if message.contains("lease-bound completion")),
+        "{legacy_append:?}"
+    );
+    assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
+
+    let wrong_lease = store.append_receipt_for_execution_lease(
+        session_id,
+        "lease-split-wrong",
+        receipt_input("act-split-lease"),
+        Utc::now(),
+    );
+    assert!(
+        matches!(wrong_lease, Err(DaemonError::Refused(ref message)) if message.contains("is not open")),
+        "{wrong_lease:?}"
+    );
+    assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
+
+    let receipt = store
+        .append_receipt_for_execution_lease(
+            session_id,
+            "lease-split",
+            receipt_input("act-split-lease"),
+            Utc::now(),
+        )
+        .unwrap();
+    assert_eq!(receipt.receipt.action_id, "act-split-lease");
+    assert!(store.open_execution_leases(session_id).unwrap().is_empty());
+    assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 1);
+}
+
+#[test]
 fn open_execution_lease_blocks_admission_and_resume_after_callback_failure() {
     let (_root, store) =
         create_store_with_session("execute-open-lease-recovery", "sess_open_lease_recovery");
@@ -833,17 +883,14 @@ fn open_execution_lease_blocks_admission_and_resume_after_callback_failure() {
         "{admission_after_open:?}"
     );
 
-    store
-        .transition_session(session_id, SessionTransition::Pause, Utc::now())
-        .unwrap();
-    let resume = store.transition_session(session_id, SessionTransition::Resume, Utc::now());
+    let pause = store.transition_session(session_id, SessionTransition::Pause, Utc::now());
     assert!(
-        matches!(resume, Err(DaemonError::Refused(ref message)) if message.contains("cannot resume session")),
-        "{resume:?}"
+        matches!(pause, Err(DaemonError::Refused(ref message)) if message.contains("cannot pause session")),
+        "{pause:?}"
     );
     assert_eq!(
         store.project(session_id).unwrap().session.status,
-        SessionStatus::Paused
+        SessionStatus::Running
     );
 }
 
@@ -876,9 +923,11 @@ fn expired_open_execution_lease_reconciliation_unblocks_session_without_reexecut
     );
     thread::sleep(Duration::from_millis(5));
 
-    store
-        .transition_session(session_id, SessionTransition::Pause, Utc::now())
-        .unwrap();
+    let pause = store.transition_session(session_id, SessionTransition::Pause, Utc::now());
+    assert!(
+        matches!(pause, Err(DaemonError::Refused(ref message)) if message.contains("cannot pause session")),
+        "{pause:?}"
+    );
     let record = store
         .reconcile_execution_lease(
             session_id,
@@ -903,10 +952,10 @@ fn expired_open_execution_lease_reconciliation_unblocks_session_without_reexecut
         JournalEvent::ExecutionLeaseReconciled { .. }
     ));
     assert!(store.open_execution_leases(session_id).unwrap().is_empty());
-
-    store
-        .transition_session(session_id, SessionTransition::Resume, Utc::now())
-        .unwrap();
+    assert_eq!(
+        store.project(session_id).unwrap().session.status,
+        SessionStatus::Running
+    );
 
     let receipt_after_reconcile =
         store.append_receipt(session_id, receipt_input("act-lease-reconcile"), Utc::now());
@@ -1013,7 +1062,18 @@ fn public_receipt_append_cannot_backdate_expired_execution_lease() {
     let mut backdated = receipt_input("act-backdate-lease");
     backdated.started_at = issued_lease.leased_at;
     backdated.finished_at = issued_lease.leased_at;
-    let result = store.append_receipt(session_id, backdated, issued_lease.leased_at);
+    let legacy_result = store.append_receipt(session_id, backdated.clone(), issued_lease.leased_at);
+    assert!(
+        matches!(legacy_result, Err(DaemonError::Refused(ref message)) if message.contains("lease-bound completion")),
+        "{legacy_result:?}"
+    );
+
+    let result = store.append_receipt_for_execution_lease(
+        session_id,
+        "lease-backdate",
+        backdated,
+        issued_lease.leased_at,
+    );
 
     assert!(
         matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("journaled after execution lease")),
