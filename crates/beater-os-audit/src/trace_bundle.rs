@@ -43,17 +43,9 @@ pub fn trace_bundle_to_json(bundle: &TraceBundle) -> Result<String, serde_json::
 }
 
 /// Options for read-only trace bundle verification.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TraceBundleVerifyOptions<'a> {
     pub expected_journal_root: Option<&'a str>,
-}
-
-impl Default for TraceBundleVerifyOptions<'_> {
-    fn default() -> Self {
-        Self {
-            expected_journal_root: None,
-        }
-    }
 }
 
 /// Result of verifying a full trace bundle as a read-only audit artifact.
