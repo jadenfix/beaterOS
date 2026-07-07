@@ -1413,7 +1413,7 @@ fn valid_counterparty_policy(policy: &str) -> bool {
 fn validate_execution_lease_heartbeat(
     record: &JournalRecord,
     heartbeat: &ExecutionLeaseHeartbeat,
-    state: &ReplayState,
+    state: &CausalityState,
 ) -> BeaterOsResult<()> {
     if heartbeat.heartbeat_id.trim().is_empty()
         || heartbeat.lease_id.trim().is_empty()
@@ -1423,7 +1423,7 @@ fn validate_execution_lease_heartbeat(
     {
         return causality_error(
             record.seq,
-            "execution lease heartbeat has empty identity field",
+            "execution lease heartbeat has empty identity field".to_string(),
         );
     }
     if heartbeat
@@ -1518,36 +1518,45 @@ fn validate_execution_lease_heartbeat(
             ),
         );
     }
-    let requested_wall_ms = lease.requested_budget.max_wall_ms.ok_or_else(|| {
-        BeaterOsError::Causality(format!(
-            "record {}: execution lease heartbeat {} cannot extend lease {} without finite wall budget",
-            record.seq, heartbeat.heartbeat_id, lease.lease_id
-        ))
-    })?;
-    let max_wall_ms = requested_wall_ms
-        .checked_add(EXECUTION_LEASE_OVERHEAD_GRACE_MS)
-        .ok_or_else(|| {
-            BeaterOsError::Causality(format!(
+    let Some(requested_wall_ms) = lease.requested_budget.max_wall_ms else {
+        return causality_error(
+            record.seq,
+            format!(
+                "record {}: execution lease heartbeat {} cannot extend lease {} without finite wall budget",
+                record.seq, heartbeat.heartbeat_id, lease.lease_id
+            ),
+        );
+    };
+    let Some(max_wall_ms) = requested_wall_ms.checked_add(EXECUTION_LEASE_OVERHEAD_GRACE_MS) else {
+        return causality_error(
+            record.seq,
+            format!(
                 "record {}: execution lease heartbeat {} wall budget overflowed",
                 record.seq, heartbeat.heartbeat_id
-            ))
-        })?;
-    let max_expires_at = lease
+            ),
+        );
+    };
+    let Ok(max_wall_delta_ms) = i64::try_from(max_wall_ms) else {
+        return causality_error(
+            record.seq,
+            format!(
+                "record {}: execution lease heartbeat {} wall budget cannot fit signed milliseconds",
+                record.seq, heartbeat.heartbeat_id
+            ),
+        );
+    };
+    let Some(max_expires_at) = lease
         .leased_at
-        .checked_add_signed(TimeDelta::milliseconds(i64::try_from(max_wall_ms).map_err(
-            |_| {
-                BeaterOsError::Causality(format!(
-                    "record {}: execution lease heartbeat {} wall budget cannot fit signed milliseconds",
-                    record.seq, heartbeat.heartbeat_id
-                ))
-            },
-        )?))
-        .ok_or_else(|| {
-            BeaterOsError::Causality(format!(
+        .checked_add_signed(TimeDelta::milliseconds(max_wall_delta_ms))
+    else {
+        return causality_error(
+            record.seq,
+            format!(
                 "record {}: execution lease heartbeat {} maximum expiration overflowed",
                 record.seq, heartbeat.heartbeat_id
-            ))
-        })?;
+            ),
+        );
+    };
     if heartbeat.extended_expires_at > max_expires_at {
         return causality_error(
             record.seq,
