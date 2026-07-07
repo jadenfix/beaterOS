@@ -833,6 +833,8 @@ fn claim_execution_lease_route(
     };
     let expected_manifest_hash = payload.expected_manifest_hash;
     let expected_decision_id = payload.expected_decision_id;
+    let expected_tool_version = payload.expected_tool_version;
+    let expected_tool_digest = payload.expected_tool_digest;
     let lease_id = payload
         .lease_id
         .unwrap_or_else(|| format!("lease-{expected_decision_id}"));
@@ -843,22 +845,29 @@ fn claim_execution_lease_route(
             action_id: action_id.to_string(),
             expected_manifest_hash,
             expected_decision_id,
+            expected_tool_version,
+            expected_tool_digest,
         },
         Utc::now(),
     ) {
         Ok(outcome) => {
+            let lease = outcome.lease;
             let lease_hash = outcome.lease_record.hash;
             serialize_response(
                 201,
                 &ClaimExecutionLeaseResponse {
-                    session_id: outcome.lease.session_id,
-                    action_id: outcome.lease.action_id,
-                    lease_id: outcome.lease.lease_id,
-                    manifest_hash: outcome.lease.manifest_hash,
-                    decision_id: outcome.lease.decision_id,
-                    tool_id: outcome.lease.tool_id,
-                    tool_ref: outcome.lease.tool_ref,
-                    expires_at: outcome.lease.expires_at.to_rfc3339(),
+                    session_id: lease.session_id,
+                    action_id: lease.action_id,
+                    lease_id: lease.lease_id,
+                    manifest_hash: lease.manifest_hash,
+                    decision_id: lease.decision_id,
+                    tool_id: lease.tool_id,
+                    tool_ref: lease.tool_ref,
+                    target: lease.target,
+                    required_grants: lease.required_grants,
+                    requested_budget: lease.requested_budget,
+                    leased_at: lease.leased_at.to_rfc3339(),
+                    expires_at: lease.expires_at.to_rfc3339(),
                     lease_seq: outcome.lease_record.seq,
                     lease_hash: lease_hash.clone(),
                     journal_root_hash: lease_hash,
@@ -1215,6 +1224,8 @@ enum ControlExecutionError {
 struct ClaimExecutionLeaseHttpRequest {
     expected_manifest_hash: String,
     expected_decision_id: String,
+    expected_tool_version: String,
+    expected_tool_digest: String,
     #[serde(default)]
     lease_id: Option<String>,
 }
@@ -1270,6 +1281,10 @@ struct ClaimExecutionLeaseResponse {
     decision_id: String,
     tool_id: String,
     tool_ref: String,
+    target: CapabilitySelector,
+    required_grants: BTreeSet<String>,
+    requested_budget: Budget,
+    leased_at: String,
     expires_at: String,
     lease_seq: u64,
     lease_hash: String,

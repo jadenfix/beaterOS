@@ -30,7 +30,7 @@ use beater_os_core::{
     ToolManifest,
 };
 use beater_os_tool_registry::{
-    RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
+    RegisteredTool, RegistryPolicy, ResolveRequest, TestStatus, ToolRegistry, ToolTrust,
 };
 use chrono::{DateTime, TimeDelta, Utc};
 
@@ -247,6 +247,8 @@ pub struct ExecutionLeaseClaimRequest {
     pub action_id: String,
     pub expected_manifest_hash: HashValue,
     pub expected_decision_id: String,
+    pub expected_tool_version: String,
+    pub expected_tool_digest: HashValue,
 }
 
 /// Durable lifecycle transition applied by the daemon store.
@@ -1032,6 +1034,7 @@ impl Store {
                 return Err(DaemonError::invalid("action_id", request.action_id));
             }
             let mut journal = self.load_journal_unlocked(session_id)?;
+            let projection = project_journal(session_id, &journal)?;
             let admission_state = admission_state_from_journal(session_id, &journal)?;
             let decision = admission_state
                 .latest_decisions
@@ -1107,6 +1110,21 @@ impl Store {
                 .resolved_target
                 .clone()
                 .unwrap_or_else(|| proposal.manifest.target.clone());
+            let registry = self.load_tool_registry_unlocked()?;
+            let registered_tool = registry.resolve(
+                &ResolveRequest::new(
+                    proposal.manifest.tool_id.clone(),
+                    request.expected_tool_version,
+                )
+                .in_workspace(projection.session.workspace_id)
+                .expecting_digest(request.expected_tool_digest),
+            )?;
+            let tool_ref = format!(
+                "{}@{}#{}",
+                registered_tool.manifest.tool_id,
+                registered_tool.manifest.version,
+                registered_tool.content_digest
+            );
             let lease = ExecutionLease {
                 lease_id: request.lease_id,
                 session_id: session_id.to_string(),
@@ -1114,7 +1132,7 @@ impl Store {
                 manifest_hash: decision.manifest_hash.clone(),
                 decision_id: decision.decision_id.clone(),
                 tool_id: proposal.manifest.tool_id.clone(),
-                tool_ref: format!("{}#{}", proposal.manifest.tool_id, decision.manifest_hash),
+                tool_ref,
                 target,
                 required_grants: proposal.manifest.required_grants.clone(),
                 requested_budget: proposal.manifest.requested_budget.clone(),

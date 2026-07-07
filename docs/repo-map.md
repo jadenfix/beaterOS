@@ -33,8 +33,10 @@ review boundaries.
     paused admission, and unresolved side-effect recovery debt without exporting
     the full journal.
   - Scheduler claim routes derive execution leases from journaled manifest and
-    policy decision state using expected manifest/decision compare-and-set
-    fields; completion requires the exact open lease id before appending a
+    policy decision state using expected manifest/decision/tool
+    compare-and-set fields, resolve pinned tool identity through the
+    daemon-owned registry, and return the derived target/grants/budget lease
+    authority; completion requires the exact open lease id before appending a
     receipt.
   - Local-shell execution can dispatch an existing scheduler-runnable pending
     action only when the journal projection proves it has no receipt, open
