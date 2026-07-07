@@ -799,7 +799,7 @@ fn expired_execution_lease_cannot_be_consumed_by_receipt() {
     );
 
     assert!(
-        matches!(result, Err(DaemonError::Core(BeaterOsError::Causality { ref message, .. })) if message.contains("finished after execution lease")),
+        matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("finished after execution lease")),
         "{result:?}"
     );
     assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
