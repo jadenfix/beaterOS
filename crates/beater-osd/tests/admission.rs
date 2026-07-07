@@ -833,9 +833,11 @@ fn open_execution_lease_blocks_admission_and_resume_after_callback_failure() {
         "{admission_after_open:?}"
     );
 
-    store
-        .transition_session(session_id, SessionTransition::Pause, Utc::now())
-        .unwrap();
+    let pause = store.transition_session(session_id, SessionTransition::Pause, Utc::now());
+    assert!(
+        matches!(pause, Err(DaemonError::Refused(ref message)) if message.contains("cannot pause session")),
+        "{pause:?}"
+    );
     let resume = store.transition_session(session_id, SessionTransition::Resume, Utc::now());
     assert!(
         matches!(resume, Err(DaemonError::Refused(ref message)) if message.contains("cannot resume session")),
@@ -843,7 +845,7 @@ fn open_execution_lease_blocks_admission_and_resume_after_callback_failure() {
     );
     assert_eq!(
         store.project(session_id).unwrap().session.status,
-        SessionStatus::Paused
+        SessionStatus::Running
     );
 }
 
@@ -876,9 +878,11 @@ fn expired_open_execution_lease_reconciliation_unblocks_session_without_reexecut
     );
     thread::sleep(Duration::from_millis(5));
 
-    store
-        .transition_session(session_id, SessionTransition::Pause, Utc::now())
-        .unwrap();
+    let pause = store.transition_session(session_id, SessionTransition::Pause, Utc::now());
+    assert!(
+        matches!(pause, Err(DaemonError::Refused(ref message)) if message.contains("cannot pause session")),
+        "{pause:?}"
+    );
     let record = store
         .reconcile_execution_lease(
             session_id,
