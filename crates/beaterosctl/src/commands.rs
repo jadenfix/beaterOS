@@ -582,9 +582,13 @@ fn action_propose(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             max_wall_ms: args
                 .get("max-wall-ms")
                 .map(|value| {
-                    value
+                    let parsed = value
                         .parse::<u64>()
-                        .map_err(|_| CliError::invalid("max-wall-ms", value))
+                        .map_err(|_| CliError::invalid("max-wall-ms", value))?;
+                    if parsed == 0 {
+                        return Err(CliError::invalid("max-wall-ms", value));
+                    }
+                    Ok(parsed)
                 })
                 .transpose()?,
             ..Budget::default()

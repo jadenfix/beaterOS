@@ -23,6 +23,7 @@ GRANT_ID = f"{SESSION_ID}-root-grant"
 REGISTER_ACTION_ID = "http-claims-register-tool"
 CLAIM_ACTION_ID = "http-claims-worker-action"
 LEASE_ID = "lease-http-claims-worker"
+WORKER_INPUT_DIGEST = "1111111111111111111111111111111111111111111111111111111111111111"
 
 
 def run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -210,7 +211,7 @@ def register_shell_tool(root: Path, token_file: Path, workdir: Path) -> tuple[st
     return version, digest, tool_ref
 
 
-def propose_claimable_action(root: Path, workdir: Path, tool_digest: str) -> tuple[str, str]:
+def propose_claimable_action(root: Path, workdir: Path, worker_input_digest: str) -> tuple[str, str]:
     cargo_bin(
         "beaterosctl",
         [
@@ -235,7 +236,7 @@ def propose_claimable_action(root: Path, workdir: Path, tool_digest: str) -> tup
             "--side-effects",
             "local_write",
             "--inputs-digest",
-            tool_digest,
+            worker_input_digest,
             "--max-wall-ms",
             "30000",
             "--summary",
@@ -269,7 +270,7 @@ def run_smoke(root: Path, *, as_json: bool) -> int:
     setup_store(root, workdir)
 
     tool_version, tool_digest, tool_ref = register_shell_tool(root, token_file, workdir)
-    decision_id, manifest_hash = propose_claimable_action(root, workdir, tool_digest)
+    decision_id, manifest_hash = propose_claimable_action(root, workdir, WORKER_INPUT_DIGEST)
 
     claim_path = f"/v1/sessions/{SESSION_ID}/actions/{CLAIM_ACTION_ID}/claims"
     bad_claim = {
@@ -308,7 +309,7 @@ def run_smoke(root: Path, *, as_json: bool) -> int:
         "started_at": claim["leased_at"],
         "finished_at": utc_now(),
         "status": "ok",
-        "input_digest": tool_digest,
+        "input_digest": WORKER_INPUT_DIGEST,
         "output_digest": "http-claims-worker-output-digest",
         "side_effect_summary": "claim smoke completed without spawning a second process",
         "side_effects": [],
