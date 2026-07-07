@@ -841,7 +841,7 @@ fn public_receipt_append_cannot_backdate_expired_execution_lease() {
     let result = store.append_receipt(session_id, backdated, now);
 
     assert!(
-        matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("journaled after execution lease")),
+        matches!(result, Err(DaemonError::Core(BeaterOsError::JournalCausality { ref reason, .. })) if reason.contains("execution lease lease-backdate")),
         "{result:?}"
     );
     assert_eq!(store.load_receipts(session_id).unwrap().receipts().len(), 0);
