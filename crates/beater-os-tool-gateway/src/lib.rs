@@ -19,15 +19,15 @@ use std::path::{Path, PathBuf};
 
 use beater_os_core::{
     ActionKind, ActionManifest, Budget, CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput,
-    CapabilitySelector, DataClass, DecisionResult, PolicyDecision, ResourceKind, RiskClass,
-    SideEffectClass, TaintLabel,
+    CapabilitySelector, DataClass, DecisionResult, HashValue, PolicyDecision, ResourceKind,
+    RiskClass, SideEffectClass, TaintLabel,
 };
 use beater_os_sandbox::{
     SandboxLimits, SandboxOutcome, SandboxRequest, SandboxStatus, execute as sandbox_execute,
     resolve_confined, safe_path_environment, validate_environment,
 };
 use beater_os_tool_registry::{ResolveRequest, ToolRegistry};
-use beater_osd::{DaemonError, Store};
+use beater_osd::{AdmissionOutcome, DaemonError, Store};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -128,6 +128,12 @@ pub enum GatewayError {
     MissingWorkspaceAllowlist { workspace_id: String },
     #[error("named grants do not cover registered tool required capabilities")]
     MissingToolCapability,
+    #[error("required grant {grant_id} is no longer active")]
+    MissingActiveGrant { grant_id: String },
+    #[error(
+        "resolved execution target changed after admission: expected {expected}, actual {actual}"
+    )]
+    ResolvedTargetChanged { expected: String, actual: String },
     #[error("observed side effects were not declared by the registered tool or invocation")]
     ObservedUndeclaredSideEffect,
 }
@@ -160,10 +166,32 @@ pub struct LocalToolInvocation {
 /// Result of a gateway-mediated invocation.
 #[derive(Debug)]
 pub struct GatewayOutcome {
+    pub admission: AdmissionOutcome,
     pub decision: PolicyDecision,
     pub manifest: ActionManifest,
     pub execution: Option<SandboxOutcome>,
     pub receipt: Option<CapabilityReceipt>,
+    pub evidence: Option<ExecutionReplayEvidence>,
+}
+
+/// Replay anchor for one hosted local-shell side effect.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecutionReplayEvidence {
+    pub session_id: String,
+    pub action_id: String,
+    pub tool_ref: String,
+    pub manifest_hash: HashValue,
+    pub proposal_seq: u64,
+    pub proposal_hash: HashValue,
+    pub decision_seq: u64,
+    pub decision_hash: HashValue,
+    pub admission_journal_root_hash: HashValue,
+    pub receipt_journal_seq: u64,
+    pub receipt_journal_hash: HashValue,
+    pub receipt_seq: u64,
+    pub receipt_hash: HashValue,
+    pub receipt_root_hash: HashValue,
+    pub final_journal_root_hash: HashValue,
 }
 
 /// Resolve, admit, execute, and receipt one local shell tool invocation.
@@ -214,12 +242,13 @@ pub fn execute_local_tool(
     ) {
         return Err(GatewayError::MissingToolCapability);
     }
-    let confinement_prefixes = confinement_prefixes(&active_grants, &invocation.required_grants);
-    if confinement_prefixes.is_empty() {
+    let initial_confinement_prefixes =
+        confinement_prefixes(&active_grants, &invocation.required_grants);
+    if initial_confinement_prefixes.is_empty() {
         return Err(GatewayError::MissingConfinement);
     }
 
-    let resolved = resolve_confined(&invocation.cwd, &confinement_prefixes)?;
+    let resolved = resolve_confined(&invocation.cwd, &initial_confinement_prefixes)?;
     let resolved_target = resolved.display().to_string();
     let mut inputs_summary = if invocation.args.is_empty() {
         invocation.command.clone()
@@ -273,24 +302,26 @@ pub fn execute_local_tool(
         human_explanation: invocation.human_explanation.clone(),
     };
 
-    let decision = store
-        .admit_action_with_revoked_handles(
-            &invocation.session_id,
-            manifest.clone(),
-            invocation.revoked_handles.clone(),
-        )?
-        .decision;
+    let admission = store.admit_action_with_revoked_handles(
+        &invocation.session_id,
+        manifest.clone(),
+        invocation.revoked_handles.clone(),
+    )?;
+    let decision = admission.decision.clone();
     if decision.result != DecisionResult::Allowed {
         return Ok(GatewayOutcome {
+            admission,
             decision,
             manifest,
             execution: None,
             receipt: None,
+            evidence: None,
         });
     }
 
     let command = invocation.command.clone();
     let args = invocation.args.clone();
+    let cwd = invocation.cwd.clone();
     let environment = invocation.environment.clone();
     let limits = invocation.limits.clone();
     let action_id = invocation.action_id.clone();
@@ -299,8 +330,48 @@ pub fn execute_local_tool(
     let receipt_target = manifest.resolved_target.clone();
     let receipt_input_digest = inputs_digest.clone();
     let receipt_tool_ref = tool_ref.clone();
-    let (receipt, execution) =
-        store.execute_and_append_receipt(&invocation.session_id, Utc::now(), |_| {
+    let required_grants_for_lease = invocation.required_grants.clone();
+    let required_tool_capabilities = tool.manifest.required_capabilities.clone();
+    let admitted_target = manifest
+        .resolved_target
+        .as_ref()
+        .unwrap_or(&manifest.target)
+        .resource_id
+        .clone();
+    let (receipt_outcome, execution) =
+        store.execute_and_append_receipt(&invocation.session_id, Utc::now(), |projection| {
+            let active_grants = projection.active_grants(Utc::now());
+            let active_grant_ids: BTreeSet<&str> = active_grants
+                .iter()
+                .map(|grant| grant.grant_id.as_str())
+                .collect();
+            for grant_id in &required_grants_for_lease {
+                if !active_grant_ids.contains(grant_id.as_str()) {
+                    return Err(GatewayError::MissingActiveGrant {
+                        grant_id: grant_id.clone(),
+                    });
+                }
+            }
+            if !tool_capabilities_covered(
+                &active_grants,
+                &required_grants_for_lease,
+                &required_tool_capabilities,
+            ) {
+                return Err(GatewayError::MissingToolCapability);
+            }
+            let confinement_prefixes =
+                confinement_prefixes(&active_grants, &required_grants_for_lease);
+            if confinement_prefixes.is_empty() {
+                return Err(GatewayError::MissingConfinement);
+            }
+            let resolved = resolve_confined(&cwd, &confinement_prefixes)?;
+            let actual_target = resolved.display().to_string();
+            if actual_target != admitted_target {
+                return Err(GatewayError::ResolvedTargetChanged {
+                    expected: admitted_target.clone(),
+                    actual: actual_target,
+                });
+            }
             let execution = sandbox_execute(&SandboxRequest {
                 command,
                 args,
@@ -357,12 +428,31 @@ pub fn execute_local_tool(
                 execution,
             ))
         })?;
+    let evidence = ExecutionReplayEvidence {
+        session_id: manifest.session_id.clone(),
+        action_id: manifest.action_id.clone(),
+        tool_ref,
+        manifest_hash: admission.decision.manifest_hash.clone(),
+        proposal_seq: admission.proposal_record.seq,
+        proposal_hash: admission.proposal_record.hash.clone(),
+        decision_seq: admission.decision_record.seq,
+        decision_hash: admission.decision_record.hash.clone(),
+        admission_journal_root_hash: admission.decision_record.hash.clone(),
+        receipt_journal_seq: receipt_outcome.receipt_record.seq,
+        receipt_journal_hash: receipt_outcome.receipt_record.hash.clone(),
+        receipt_seq: receipt_outcome.receipt.seq,
+        receipt_hash: receipt_outcome.receipt.receipt_hash.clone(),
+        receipt_root_hash: receipt_outcome.receipt.receipt_hash.clone(),
+        final_journal_root_hash: receipt_outcome.receipt_record.hash.clone(),
+    };
 
     Ok(GatewayOutcome {
+        admission,
         decision,
         manifest,
         execution: Some(execution),
-        receipt: Some(receipt),
+        receipt: Some(receipt_outcome.receipt),
+        evidence: Some(evidence),
     })
 }
 

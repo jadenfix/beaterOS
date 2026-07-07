@@ -833,7 +833,7 @@ impl Store {
         session_id: &str,
         created_at: DateTime<Utc>,
         execute: impl FnOnce(&SessionProjection) -> Result<(CapabilityReceiptInput, T), E>,
-    ) -> Result<(CapabilityReceipt, T), E>
+    ) -> Result<(ReceiptAppendOutcome, T), E>
     where
         E: From<DaemonError>,
     {
@@ -848,15 +848,22 @@ impl Store {
             .append(input)
             .map_err(DaemonError::from)
             .map_err(E::from)?;
-        self.append_event_unlocked(
-            session_id,
-            JournalEvent::ReceiptAppended {
-                receipt: receipt.clone(),
+        let receipt_record = self
+            .append_event_unlocked(
+                session_id,
+                JournalEvent::ReceiptAppended {
+                    receipt: receipt.clone(),
+                },
+                created_at,
+            )
+            .map_err(E::from)?;
+        Ok((
+            ReceiptAppendOutcome {
+                receipt_record,
+                receipt,
             },
-            created_at,
-        )
-        .map_err(E::from)?;
-        Ok((receipt, outcome))
+            outcome,
+        ))
     }
 
     /// Load and verify a session journal under the writer lock so readers never

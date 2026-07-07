@@ -592,22 +592,22 @@ fn check_grant_validity(snapshot: &JournalSnapshot) -> CheckResult {
 /// this invariant, so this is a redundant second implementation (defense in
 /// depth), not a check that catches something core misses.
 fn check_receipt_causality(snapshot: &JournalSnapshot) -> CheckResult {
-    let mut proposed: BTreeSet<&str> = BTreeSet::new();
-    let mut allowed: BTreeSet<&str> = BTreeSet::new();
+    let mut proposed: BTreeMap<&str, &ActionManifest> = BTreeMap::new();
+    let mut allowed: BTreeMap<&str, &str> = BTreeMap::new();
     for record in &snapshot.records {
         match &record.event {
             JournalEvent::ActionProposed { manifest } => {
-                proposed.insert(manifest.action_id.as_str());
+                proposed.insert(manifest.action_id.as_str(), manifest);
             }
             JournalEvent::PolicyDecided { decision } => {
                 if decision.result == DecisionResult::Allowed {
-                    allowed.insert(decision.action_id.as_str());
+                    allowed.insert(decision.action_id.as_str(), decision.manifest_hash.as_str());
                 } else {
                     allowed.remove(decision.action_id.as_str());
                 }
             }
             JournalEvent::ReceiptAppended { receipt } => {
-                if !proposed.contains(receipt.action_id.as_str()) {
+                let Some(manifest) = proposed.get(receipt.action_id.as_str()) else {
                     return CheckResult::fail(
                         "receipt_causality",
                         format!(
@@ -615,13 +615,76 @@ fn check_receipt_causality(snapshot: &JournalSnapshot) -> CheckResult {
                             receipt.receipt_id, receipt.action_id
                         ),
                     );
-                }
-                if !allowed.contains(receipt.action_id.as_str()) {
+                };
+                let Some(allowed_manifest_hash) = allowed.get(receipt.action_id.as_str()) else {
                     return CheckResult::fail(
                         "receipt_causality",
                         format!(
                             "receipt {} references action {} without a prior allowed decision",
                             receipt.receipt_id, receipt.action_id
+                        ),
+                    );
+                };
+                match manifest.digest() {
+                    Ok(actual_hash) if actual_hash == *allowed_manifest_hash => {}
+                    Ok(actual_hash) => {
+                        return CheckResult::fail(
+                            "receipt_causality",
+                            format!(
+                                "receipt {} follows a decision for stale manifest hash {}, actual {}",
+                                receipt.receipt_id, allowed_manifest_hash, actual_hash
+                            ),
+                        );
+                    }
+                    Err(err) => {
+                        return CheckResult::fail(
+                            "receipt_causality",
+                            format!(
+                                "receipt {} manifest hash could not be recomputed: {err}",
+                                receipt.receipt_id
+                            ),
+                        );
+                    }
+                }
+                if receipt.tool_id != manifest.tool_id {
+                    return CheckResult::fail(
+                        "receipt_causality",
+                        format!(
+                            "receipt {} tool {} does not match manifest tool {}",
+                            receipt.receipt_id, receipt.tool_id, manifest.tool_id
+                        ),
+                    );
+                }
+                if receipt.input_digest != manifest.inputs_digest {
+                    return CheckResult::fail(
+                        "receipt_causality",
+                        format!(
+                            "receipt {} input digest does not match manifest",
+                            receipt.receipt_id
+                        ),
+                    );
+                }
+                let expected_target = manifest
+                    .resolved_target
+                    .as_ref()
+                    .unwrap_or(&manifest.target);
+                if &receipt.target != expected_target {
+                    return CheckResult::fail(
+                        "receipt_causality",
+                        format!(
+                            "receipt {} target does not match manifest",
+                            receipt.receipt_id
+                        ),
+                    );
+                }
+                let observed_effects: BTreeSet<_> = receipt.side_effects.iter().collect();
+                let declared_effects: BTreeSet<_> = manifest.expected_side_effects.iter().collect();
+                if !observed_effects.is_subset(&declared_effects) {
+                    return CheckResult::fail(
+                        "receipt_causality",
+                        format!(
+                            "receipt {} records side effects outside the manifest declaration",
+                            receipt.receipt_id
                         ),
                     );
                 }
@@ -631,7 +694,7 @@ fn check_receipt_causality(snapshot: &JournalSnapshot) -> CheckResult {
     }
     CheckResult::pass(
         "receipt_causality",
-        "every receipt follows a proposed and allowed action",
+        "every receipt follows a proposed and allowed action and binds to its manifest",
     )
 }
 

@@ -221,6 +221,17 @@ def run_smoke(root: Path, *, as_json: bool) -> int:
     receipt = payload.get("receipt")
     if not receipt or not receipt.get("receipt_hash"):
         raise RuntimeError(f"expected receipt with hash: {payload}")
+    evidence = payload.get("evidence")
+    if not evidence:
+        raise RuntimeError(f"expected execution evidence: {payload}")
+    if evidence.get("action_id") != ACTION_ID:
+        raise RuntimeError(f"evidence action mismatch: {evidence}")
+    if evidence.get("receipt_hash") != receipt["receipt_hash"]:
+        raise RuntimeError(f"evidence receipt hash mismatch: {payload}")
+    if evidence.get("final_journal_root_hash") != evidence.get("receipt_journal_hash"):
+        raise RuntimeError(f"evidence final journal root mismatch: {payload}")
+    if not evidence.get("tool_ref", "").startswith("shell@"):
+        raise RuntimeError(f"evidence missing shell tool ref: {payload}")
     output_path = workdir / "http-out.txt"
     if output_path.read_text(encoding="utf-8") != "http-smoke":
         raise RuntimeError(f"unexpected output file content at {output_path}")
@@ -240,6 +251,7 @@ def run_smoke(root: Path, *, as_json: bool) -> int:
         "decision": payload["decision"],
         "receipt_id": receipt["receipt_id"],
         "receipt_hash": receipt["receipt_hash"],
+        "final_journal_root_hash": evidence["final_journal_root_hash"],
         "output": str(output_path),
     }
     if as_json:

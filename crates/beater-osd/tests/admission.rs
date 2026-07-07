@@ -574,9 +574,9 @@ fn execution_lock_excludes_lifecycle_transition_until_receipt_append() {
         "{transition_result:?}"
     );
 
-    let (receipt, outcome) = execute.join().unwrap().unwrap();
+    let (receipt_outcome, outcome) = execute.join().unwrap().unwrap();
     assert_eq!(outcome, "callback-finished");
-    assert_eq!(receipt.action_id, "act-execute-lock");
+    assert_eq!(receipt_outcome.receipt.action_id, "act-execute-lock");
     assert_eq!(
         store.project(session_id).unwrap().session.status,
         SessionStatus::Running
