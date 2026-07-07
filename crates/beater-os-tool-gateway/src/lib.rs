@@ -672,7 +672,7 @@ pub fn execute_claimed_local_tool(
                     action_id: lease.action_id.clone(),
                     tool_id: lease.tool_id.clone(),
                     target: CapabilitySelector {
-                        resource_kind: lease.target.resource_kind,
+                        resource_kind: lease.target.resource_kind.clone(),
                         resource_id: execution.resolved_target.display().to_string(),
                     },
                     started_at,
