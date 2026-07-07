@@ -22,11 +22,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use beater_os_core::{
-    ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, CapabilityGrant,
-    CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult, DelegationMode,
-    HashValue, InMemoryJournal, JournalEvent, JournalRecord, JournalSnapshot, PaymentMandate,
-    PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind, RiskClass, SessionStatus,
-    SideEffectClass, SimulationEvidence, ToolManifest,
+    ActionKind, ActionManifest, AdmissionContext, AgentSession, ApprovalEvidence, Budget,
+    CapabilityGrant, CapabilityReceipt, CapabilityReceiptInput, CapabilityScope, DecisionResult,
+    DelegationMode, HashValue, InMemoryJournal, JournalEvent, JournalRecord, JournalSnapshot,
+    PaymentMandate, PolicyDecision, PolicyEngine, ReceiptLedger, ResourceKind, RiskClass,
+    SessionStatus, SideEffectClass, SimulationEvidence, ToolManifest,
 };
 use beater_os_tool_registry::{
     RegisteredTool, RegistryPolicy, TestStatus, ToolRegistry, ToolTrust,
@@ -737,6 +737,8 @@ impl Store {
                 actor_id: admission_state.session.agent_id,
                 session_id: admission_state.session.session_id,
                 policy_version: DAEMON_POLICY_VERSION.to_string(),
+                session_budget: admission_state.session.budget,
+                session_budget_used: admission_state.session_budget_used,
                 grants: admission_state.grants.into_values().collect(),
                 approvals: admission_state.approvals,
                 simulations: admission_state.simulations,
@@ -1245,6 +1247,7 @@ struct AdmissionState {
     event_ids: BTreeSet<String>,
     mandates: BTreeMap<String, PaymentMandate>,
     payment_reserved_by_mandate: BTreeMap<String, u64>,
+    session_budget_used: Budget,
     proposals: BTreeMap<String, ProposedAction>,
     latest_decisions: BTreeMap<String, PolicyDecision>,
     approvals: Vec<ApprovalEvidence>,
@@ -1267,6 +1270,7 @@ fn admission_state_from_journal(
     let mut event_ids = BTreeSet::new();
     let mut mandates = BTreeMap::new();
     let mut payment_reserved_by_mandate = BTreeMap::new();
+    let mut session_budget_used = Budget::default();
     let mut proposals = BTreeMap::new();
     let mut latest_decisions = BTreeMap::new();
     let mut approvals = Vec::new();
@@ -1347,8 +1351,10 @@ fn admission_state_from_journal(
             }
             JournalEvent::ApprovalRecorded { approval } => approvals.push(approval.clone()),
             JournalEvent::SimulationRecorded { simulation } => simulations.push(simulation.clone()),
-            JournalEvent::ReceiptAppended { .. }
-            | JournalEvent::MemoryWritten { .. }
+            JournalEvent::ReceiptAppended { receipt } => {
+                debit_receipt_budget(&mut session_budget_used, receipt)?;
+            }
+            JournalEvent::MemoryWritten { .. }
             | JournalEvent::ScenarioEvaluated { .. }
             | JournalEvent::IncidentAnnotated { .. } => {}
         }
@@ -1399,6 +1405,7 @@ fn admission_state_from_journal(
         event_ids,
         mandates,
         payment_reserved_by_mandate,
+        session_budget_used,
         proposals,
         latest_decisions,
         approvals,
@@ -1413,6 +1420,38 @@ fn reserves_payment_capacity(result: beater_os_core::DecisionResult) -> bool {
             | beater_os_core::DecisionResult::NeedsApproval
             | beater_os_core::DecisionResult::NeedsSimulation
     )
+}
+
+fn debit_receipt_budget(budget: &mut Budget, receipt: &CapabilityReceipt) -> DaemonResult<()> {
+    let tool_calls = budget.max_tool_calls.get_or_insert(0);
+    *tool_calls = tool_calls.checked_add(1).ok_or_else(|| {
+        DaemonError::Refused(
+            "session budget replay overflowed committed tool-call usage".to_string(),
+        )
+    })?;
+
+    let elapsed = receipt
+        .finished_at
+        .signed_duration_since(receipt.started_at);
+    if elapsed.num_milliseconds() < 0 {
+        return Err(DaemonError::Refused(format!(
+            "receipt {} finished before it started",
+            receipt.receipt_id
+        )));
+    }
+    let elapsed_ms = u64::try_from(elapsed.num_milliseconds()).map_err(|_| {
+        DaemonError::Refused(format!(
+            "receipt {} wall-clock duration could not fit u64 milliseconds",
+            receipt.receipt_id
+        ))
+    })?;
+    let wall_ms = budget.max_wall_ms.get_or_insert(0);
+    *wall_ms = wall_ms.checked_add(elapsed_ms).ok_or_else(|| {
+        DaemonError::Refused(
+            "session budget replay overflowed committed wall-clock usage".to_string(),
+        )
+    })?;
+    Ok(())
 }
 
 fn payment_reserved_by_mandate_excluding(

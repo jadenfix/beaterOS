@@ -134,6 +134,8 @@ pub enum GatewayError {
         "resolved execution target changed after admission: expected {expected}, actual {actual}"
     )]
     ResolvedTargetChanged { expected: String, actual: String },
+    #[error("local shell timeout is too large to represent as a runtime wall-clock budget")]
+    RuntimeBudgetOverflow,
     #[error("observed side effects were not declared by the registered tool or invocation")]
     ObservedUndeclaredSideEffect,
 }
@@ -274,6 +276,8 @@ pub fn execute_local_tool(
         "{}@{}#{}",
         tool.manifest.tool_id, tool.manifest.version, tool.content_digest
     );
+    let requested_wall_ms = u64::try_from(invocation.limits.timeout.as_millis())
+        .map_err(|_| GatewayError::RuntimeBudgetOverflow)?;
     let manifest = ActionManifest {
         action_id: invocation.action_id.clone(),
         session_id: invocation.session_id.clone(),
@@ -292,7 +296,12 @@ pub fn execute_local_tool(
         expected_outputs: Vec::new(),
         expected_side_effects: expected_side_effects.clone(),
         required_grants: invocation.required_grants.clone(),
-        requested_budget: Budget::default(),
+        requested_budget: Budget {
+            max_model_cents: None,
+            max_tool_calls: Some(1),
+            max_wall_ms: Some(requested_wall_ms),
+            max_payment_minor_units: None,
+        },
         risk_class: invocation.risk_class.max(tool.manifest.risk_class),
         data_classes: invocation.data_classes.clone(),
         taint: invocation.taint.clone(),
