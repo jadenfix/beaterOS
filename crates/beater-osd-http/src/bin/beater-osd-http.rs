@@ -782,11 +782,12 @@ fn execute_local_shell_request(
     let action_id = payload
         .action_id
         .unwrap_or_else(|| format!("daemon-exec-{}", Utc::now().timestamp_millis()));
-    if projection.manifest(&action_id).is_some() {
-        return Err(ControlExecutionError::Refused(format!(
-            "action {action_id} was already proposed in this session"
-        )));
-    }
+    let dispatch_mode = if projection.manifest(&action_id).is_some() {
+        ensure_existing_action_runnable(&projection, &action_id)?;
+        "runnable_pending_action"
+    } else {
+        "new_action"
+    };
     let command = required_non_empty("command", payload.command)?;
     let cwd = required_non_empty("cwd", payload.cwd)?;
     if command.contains('/') {
@@ -923,6 +924,7 @@ fn execute_local_shell_request(
         .map(ExecutionEvidenceResponse::from);
     Ok(ExecuteLocalShellResponse {
         action_id: outcome.manifest.action_id,
+        dispatch: dispatch_mode.to_string(),
         decision: decision_result_to_string(&outcome.decision.result).to_string(),
         explanation: outcome.decision.explanation,
         resolved,
@@ -930,6 +932,50 @@ fn execute_local_shell_request(
         receipt,
         evidence,
     })
+}
+
+fn ensure_existing_action_runnable(
+    projection: &beater_osd::SessionProjection,
+    action_id: &str,
+) -> Result<(), ControlExecutionError> {
+    let Some(decision) = projection.latest_decision(action_id) else {
+        return Err(ControlExecutionError::Refused(format!(
+            "action {action_id} was proposed but has no policy decision"
+        )));
+    };
+    if decision.result != DecisionResult::Allowed {
+        return Err(ControlExecutionError::Refused(format!(
+            "action {action_id} latest decision is not allowed"
+        )));
+    }
+    if projection
+        .receipts
+        .iter()
+        .any(|receipt| receipt.action_id == action_id)
+    {
+        return Err(ControlExecutionError::Refused(format!(
+            "action {action_id} already has a receipt"
+        )));
+    }
+    if projection
+        .execution_reconciliations
+        .iter()
+        .any(|reconciliation| reconciliation.action_id == action_id)
+    {
+        return Err(ControlExecutionError::Refused(format!(
+            "action {action_id} has outcome-unknown reconciliation and cannot be dispatched"
+        )));
+    }
+    if projection
+        .execution_leases
+        .iter()
+        .any(|lease| lease.action_id == action_id)
+    {
+        return Err(ControlExecutionError::Refused(format!(
+            "action {action_id} already has an execution lease"
+        )));
+    }
+    Ok(())
 }
 
 fn ensure_cwd_inside_grants(
@@ -1043,6 +1089,7 @@ struct ExecuteLocalShellRequest {
 #[derive(Debug, Serialize)]
 struct ExecuteLocalShellResponse {
     action_id: String,
+    dispatch: String,
     decision: String,
     explanation: String,
     resolved: String,

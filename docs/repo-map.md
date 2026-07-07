@@ -32,6 +32,10 @@ review boundaries.
     operators can distinguish ordinary idle state from runnable pending work,
     paused admission, and unresolved side-effect recovery debt without exporting
     the full journal.
+  - Local-shell execution can dispatch an existing scheduler-runnable pending
+    action only when the journal projection proves it has no receipt, open
+    execution lease, or outcome-unknown reconciliation; the daemon execution
+    lease remains the atomic worker claim.
 - `crates/beaterosctl`
   - Operator CLI for session/grant/manifests/receipts.
 

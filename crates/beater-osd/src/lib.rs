@@ -846,6 +846,24 @@ impl Store {
                     manifest.action_id
                 )));
             }
+            if admission_state
+                .receipted_actions
+                .contains(&manifest.action_id)
+            {
+                return Err(DaemonError::Refused(format!(
+                    "action {} already has a receipt and cannot be re-admitted",
+                    manifest.action_id
+                )));
+            }
+            if admission_state
+                .reconciled_execution_actions
+                .contains_key(&manifest.action_id)
+            {
+                return Err(DaemonError::Refused(format!(
+                    "action {} has outcome-unknown reconciliation and cannot be re-admitted",
+                    manifest.action_id
+                )));
+            }
 
             let now = Utc::now();
             let payment_reserved_by_mandate = payment_reserved_by_mandate_excluding(
@@ -1005,6 +1023,95 @@ impl Store {
                 &admission_state.open_execution_leases,
                 "issue execution lease",
             )
+            .into());
+        }
+        if admission_state.receipted_actions.contains(&lease.action_id) {
+            return Err(DaemonError::Refused(format!(
+                "action {} already has a receipt and cannot be re-executed",
+                lease.action_id
+            ))
+            .into());
+        }
+        let decision = admission_state
+            .latest_decisions
+            .get(&lease.action_id)
+            .ok_or_else(|| {
+                DaemonError::Refused(format!(
+                    "action {} has no policy decision for execution lease",
+                    lease.action_id
+                ))
+            })
+            .map_err(E::from)?;
+        if decision.result != DecisionResult::Allowed {
+            return Err(DaemonError::Refused(format!(
+                "action {} latest policy decision is not allowed",
+                lease.action_id
+            ))
+            .into());
+        }
+        if decision.decision_id != lease.decision_id {
+            return Err(DaemonError::Refused(format!(
+                "execution lease {} decision {} does not match latest decision {} for action {}",
+                lease.lease_id, lease.decision_id, decision.decision_id, lease.action_id
+            ))
+            .into());
+        }
+        if decision.manifest_hash != lease.manifest_hash {
+            return Err(DaemonError::Refused(format!(
+                "execution lease {} manifest hash does not match decision {}",
+                lease.lease_id, decision.decision_id
+            ))
+            .into());
+        }
+        let proposal = admission_state
+            .proposals
+            .get(&lease.action_id)
+            .ok_or_else(|| {
+                DaemonError::Refused(format!(
+                    "action {} has no proposed manifest for execution lease",
+                    lease.action_id
+                ))
+            })
+            .map_err(E::from)?;
+        let manifest_hash = proposal.manifest.digest().map_err(DaemonError::from)?;
+        if manifest_hash != decision.manifest_hash {
+            return Err(DaemonError::Refused(format!(
+                "action {} manifest hash no longer matches latest decision {}",
+                lease.action_id, decision.decision_id
+            ))
+            .into());
+        }
+        if proposal.manifest.tool_id != lease.tool_id {
+            return Err(DaemonError::Refused(format!(
+                "execution lease {} tool {} does not match manifest tool {}",
+                lease.lease_id, lease.tool_id, proposal.manifest.tool_id
+            ))
+            .into());
+        }
+        let admitted_target = proposal
+            .manifest
+            .resolved_target
+            .as_ref()
+            .unwrap_or(&proposal.manifest.target);
+        if admitted_target != &lease.target {
+            return Err(DaemonError::Refused(format!(
+                "execution lease {} target does not match admitted manifest target",
+                lease.lease_id
+            ))
+            .into());
+        }
+        if proposal.manifest.required_grants != lease.required_grants {
+            return Err(DaemonError::Refused(format!(
+                "execution lease {} grants do not match admitted manifest grants",
+                lease.lease_id
+            ))
+            .into());
+        }
+        if proposal.manifest.requested_budget != lease.requested_budget {
+            return Err(DaemonError::Refused(format!(
+                "execution lease {} budget does not match admitted manifest budget",
+                lease.lease_id
+            ))
             .into());
         }
         let lease_window = lease.expires_at.signed_duration_since(lease.leased_at);
@@ -1525,6 +1632,7 @@ struct AdmissionState {
     payment_reserved_by_mandate: BTreeMap<String, u64>,
     session_budget_used: Budget,
     pending_runtime_budget_by_action: BTreeMap<String, Budget>,
+    receipted_actions: BTreeSet<String>,
     open_execution_leases: BTreeMap<String, ExecutionLease>,
     reconciled_execution_actions: BTreeMap<String, ExecutionLeaseReconciliation>,
     proposals: BTreeMap<String, ProposedAction>,
@@ -1748,6 +1856,7 @@ fn admission_state_from_journal(
         payment_reserved_by_mandate,
         session_budget_used,
         pending_runtime_budget_by_action,
+        receipted_actions,
         open_execution_leases,
         reconciled_execution_actions,
         proposals,
