@@ -17,6 +17,45 @@ runtime boundary and delegates deterministic admission to
 `beater-os-core::PolicyEngine`, outside of any model output. It cannot broaden a
 grant, and it fails closed on missing or invalid input.
 
+## Loopback HTTP control plane
+
+`beater-osd-http serve` exposes a token-gated loopback control plane for local
+agent runners. It enforces loopback `Host`/`Origin` checks and an unguessable
+bearer token from `--token-file`; routes other than `GET /healthz` require that
+token.
+
+The worker-loop route is:
+
+```text
+POST /v1/sessions/<session-id>/actions/execute-local-shell-loop
+```
+
+The body names a local shell command recipe and an explicit `max_actions` bound.
+The route does not accept lease ids, receipt ids, or capability grants. It
+delegates to `AgentRuntime::run_local_shell_worker_loop`, which repeatedly
+selects daemon-claimable admitted actions, claims fresh execution leases,
+executes through the gateway/sandbox, and appends exact receipts. The HTTP
+surface caps `max_actions` at 16 and `timeout_secs` at 30 seconds per action so
+one protocol request cannot monopolize the synchronous control-plane server.
+
+Example body:
+
+```json
+{
+  "tool": "shell",
+  "tool_digest": "<sha256>",
+  "command": "sh",
+  "args": ["-c", "printf ok > out.txt"],
+  "cwd": "/workspace/project",
+  "side_effects": ["local_write"],
+  "timeout_secs": 30,
+  "max_actions": 8
+}
+```
+
+The response is the serialized runtime worker-loop outcome, including
+`stop_reason`, executed action reports, and the final projection summary.
+
 ## Store layout
 
 The store root is chosen by, in order of precedence: the `--home` flag, the
