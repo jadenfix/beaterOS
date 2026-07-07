@@ -709,6 +709,7 @@ fn receipt_record(store: &Store, args: &ParsedArgs) -> CliResult<String> {
             side_effects,
             external_ids: args.csv("external-id"),
             artifact_refs: args.csv("artifact"),
+            payment_receipt: None,
         },
         now,
     )?;

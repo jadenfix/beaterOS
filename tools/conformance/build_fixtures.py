@@ -295,18 +295,37 @@ def build_payment_bundle() -> dict:
                  "charged 6200 USD minor units to approved vendor #4471", ["payment"]),
     ])
     receipts[0]["external_ids"] = ["stripe:ch_test_4471"]
-    # Re-hash after adding external_ids so the chain stays valid.
+    receipts[0]["payment_receipt"] = {
+        "manifest_hash": sha256_hex(m_pay),
+        "mandate_id": "mandate-vendor",
+        "rail": "stripe",
+        "adapter_id": "stripe",
+        "adapter_version": "2026-07",
+        "asset": "USD",
+        "amount_minor_units": 6200,
+        "counterparty_ref": "vendor:4471",
+        "counterparty_binding_hash": "4" * 64,
+        "purpose": "Settle approved vendor invoices.",
+        "payment_idempotency_key": "idem-pay-invoice",
+        "envelope_format": "stripe-payment-intent-v1",
+        "envelope_hash": "5" * 64,
+        "rail_receipt_hash": "6" * 64,
+        "settlement_status": "settled",
+        "settled_at": tp.format(2),
+    }
+    # Re-hash after adding supplemental and typed payment evidence so the chain stays valid.
     receipts[0].pop("receipt_hash")
     receipts[0]["receipt_hash"] = sha256_hex(hash_preimage(receipts[0], "receipt_hash"))
 
     events = [
         {"kind": "session_created", "session": session},
+        {"kind": "payment_mandate_issued", "mandate": mandate},
         {"kind": "capability_granted", "grant": grant},
         {"kind": "action_proposed", "manifest": m_pay},
         {"kind": "policy_decided", "decision": d_pay},
         {"kind": "receipt_appended", "receipt": receipts[0]},
     ]
-    times = [tp.format(0), tp.format(0), tp.format(1), tp.format(2), tp.format(2)]
+    times = [tp.format(0), tp.format(0), tp.format(0), tp.format(1), tp.format(2), tp.format(2)]
     journal = _chain_journal(events, times)
 
     return {

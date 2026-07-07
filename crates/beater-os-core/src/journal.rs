@@ -5,11 +5,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
     ActionManifest, AgentSession, ApprovalEvidence, CapabilityGrant, DecisionResult, MemoryRecord,
-    PaymentMandate, PolicyDecision, ScenarioManifest, SessionStatus, SimulationEvidence,
+    PaymentIntent, PaymentMandate, PolicyDecision, ScenarioManifest, SessionStatus,
+    SideEffectClass, SimulationEvidence,
 };
 use crate::error::{BeaterOsError, BeaterOsResult};
 use crate::hash::{GENESIS_HASH, HashValue, hash_json};
-use crate::receipt::{CapabilityReceipt, ReceiptLedger};
+use crate::receipt::{CapabilityReceipt, PaymentReceiptEvidence, ReceiptLedger};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -203,6 +204,7 @@ struct CausalityState {
     session_statuses: BTreeMap<String, SessionStatus>,
     proposed_actions: BTreeMap<String, ActionManifest>,
     issued_grants: BTreeMap<String, CapabilityGrant>,
+    issued_mandates: BTreeMap<String, PaymentMandate>,
     allowed_decisions: BTreeMap<String, HashValue>,
     latest_decision_by_action: BTreeMap<String, DecisionResult>,
     review_ids: BTreeMap<String, ()>,
@@ -594,8 +596,24 @@ fn verify_event_causality(
                     ),
                 );
             }
+            validate_payment_receipt(record.seq, record.created_at, manifest, receipt, state)?;
             state.receipt_chain.push(receipt.clone());
             ReceiptLedger::from_receipts(state.receipt_chain.clone()).verify_chain()?;
+        }
+        JournalEvent::PaymentMandateIssued { mandate } => {
+            if state
+                .issued_mandates
+                .insert(mandate.mandate_id.clone(), mandate.clone())
+                .is_some()
+            {
+                return causality_error(
+                    record.seq,
+                    format!(
+                        "payment mandate {} was issued more than once",
+                        mandate.mandate_id
+                    ),
+                );
+            }
         }
         JournalEvent::MemoryWritten { memory } => {
             validate_memory_source(
@@ -604,9 +622,7 @@ fn verify_event_causality(
                 state.prior_event_ids.iter().map(String::as_str),
             )?;
         }
-        JournalEvent::PaymentMandateIssued { .. }
-        | JournalEvent::ScenarioEvaluated { .. }
-        | JournalEvent::IncidentAnnotated { .. } => {}
+        JournalEvent::ScenarioEvaluated { .. } | JournalEvent::IncidentAnnotated { .. } => {}
     }
     if let Some(event_id) = primary_event_id(record)
         && !state.prior_event_ids.insert(event_id.to_string())
@@ -617,6 +633,163 @@ fn verify_event_causality(
         );
     }
     Ok(())
+}
+
+fn validate_payment_receipt(
+    seq: u64,
+    created_at: chrono::DateTime<Utc>,
+    manifest: &ActionManifest,
+    receipt: &CapabilityReceipt,
+    state: &CausalityState,
+) -> BeaterOsResult<()> {
+    if !is_payment_manifest(manifest) {
+        if receipt.payment_receipt.is_some() {
+            return causality_error(
+                seq,
+                format!(
+                    "receipt {} carries payment receipt evidence for non-payment action {}",
+                    receipt.receipt_id, manifest.action_id
+                ),
+            );
+        }
+        return Ok(());
+    }
+
+    if !receipt.side_effects.contains(&SideEffectClass::Payment) {
+        return causality_error(
+            seq,
+            format!(
+                "payment receipt {} must report the payment side effect declared by action {}",
+                receipt.receipt_id, manifest.action_id
+            ),
+        );
+    }
+
+    let Some(intent) = &manifest.payment_intent else {
+        return causality_error(
+            seq,
+            format!(
+                "payment receipt {} references action {} without a payment_intent",
+                receipt.receipt_id, manifest.action_id
+            ),
+        );
+    };
+    let Some(mandate) = state.issued_mandates.get(&intent.mandate_id) else {
+        return causality_error(
+            seq,
+            format!(
+                "payment receipt {} references mandate {} before it was issued",
+                receipt.receipt_id, intent.mandate_id
+            ),
+        );
+    };
+    match mandate.receipt_requirement.as_str() {
+        "required" => {}
+        other => {
+            return causality_error(
+                seq,
+                format!(
+                    "payment mandate {} has unsupported receipt_requirement {other:?}",
+                    mandate.mandate_id
+                ),
+            );
+        }
+    }
+
+    let Some(evidence) = &receipt.payment_receipt else {
+        return causality_error(
+            seq,
+            format!(
+                "payment receipt {} is missing required typed payment evidence",
+                receipt.receipt_id
+            ),
+        );
+    };
+    validate_payment_receipt_evidence(seq, created_at, manifest, intent, mandate, evidence)
+}
+
+fn validate_payment_receipt_evidence(
+    seq: u64,
+    created_at: chrono::DateTime<Utc>,
+    manifest: &ActionManifest,
+    intent: &PaymentIntent,
+    mandate: &PaymentMandate,
+    evidence: &PaymentReceiptEvidence,
+) -> BeaterOsResult<()> {
+    let manifest_hash = manifest.digest()?;
+    if evidence.manifest_hash != manifest_hash {
+        return causality_error(
+            seq,
+            format!(
+                "payment receipt evidence manifest_hash does not match action {}",
+                manifest.action_id
+            ),
+        );
+    }
+    if evidence.mandate_id != intent.mandate_id
+        || evidence.rail != intent.rail
+        || evidence.adapter_id != intent.adapter_id
+        || evidence.adapter_version != intent.adapter_version
+        || evidence.asset != intent.asset
+        || evidence.amount_minor_units != intent.amount_minor_units
+        || evidence.counterparty_ref != intent.counterparty_ref
+        || evidence.counterparty_binding_hash != intent.counterparty_binding_hash
+        || evidence.purpose != intent.purpose
+        || evidence.payment_idempotency_key != intent.payment_idempotency_key
+        || evidence.envelope_format != intent.envelope_format
+        || evidence.envelope_hash != intent.envelope_hash
+    {
+        return causality_error(
+            seq,
+            format!(
+                "payment receipt evidence does not match payment_intent for action {}",
+                manifest.action_id
+            ),
+        );
+    }
+    if evidence.rail != mandate.rail
+        || evidence.asset != mandate.asset
+        || evidence.purpose != mandate.purpose
+        || evidence.payment_idempotency_key != mandate.idempotency_key
+    {
+        return causality_error(
+            seq,
+            format!(
+                "payment receipt evidence does not match mandate {}",
+                mandate.mandate_id
+            ),
+        );
+    }
+    if !is_hex_64(&evidence.rail_receipt_hash) {
+        return causality_error(
+            seq,
+            "payment receipt evidence rail_receipt_hash must be lowercase 32-byte hex".to_string(),
+        );
+    }
+    if let Some(settled_at) = evidence.settled_at
+        && settled_at > created_at
+    {
+        return causality_error(
+            seq,
+            "payment receipt evidence settled_at is future-dated".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn is_payment_manifest(manifest: &ActionManifest) -> bool {
+    manifest.action_kind == crate::contracts::ActionKind::Spend
+        || manifest
+            .expected_side_effects
+            .contains(&SideEffectClass::Payment)
+}
+
+fn is_hex_64(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn primary_event_id(record: &JournalRecord) -> Option<&str> {

@@ -326,6 +326,7 @@ fn build_bootstrap_receipt_input(manifest: &ActionManifest) -> CapabilityReceipt
         side_effects: vec![SideEffectClass::LocalWrite],
         external_ids: vec![format!("runtime-smoke-{}", manifest.action_id)],
         artifact_refs: Vec::new(),
+        payment_receipt: None,
     }
 }
 

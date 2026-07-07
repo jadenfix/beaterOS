@@ -318,6 +318,7 @@ impl AgentRuntime {
                 side_effects: Vec::new(),
                 external_ids: observation.external_ids,
                 artifact_refs: observation.artifact_refs,
+                payment_receipt: None,
             },
             finished_at,
         )?;

@@ -24,6 +24,39 @@ pub struct CapabilityReceiptInput {
     pub external_ids: Vec<String>,
     #[serde(default)]
     pub artifact_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payment_receipt: Option<Box<PaymentReceiptEvidence>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaymentSettlementStatus {
+    Submitted,
+    Settled,
+    Failed,
+    Canceled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaymentReceiptEvidence {
+    pub manifest_hash: HashValue,
+    pub mandate_id: String,
+    pub rail: String,
+    pub adapter_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_version: Option<String>,
+    pub asset: String,
+    pub amount_minor_units: u64,
+    pub counterparty_ref: String,
+    pub counterparty_binding_hash: HashValue,
+    pub purpose: String,
+    pub payment_idempotency_key: String,
+    pub envelope_format: String,
+    pub envelope_hash: HashValue,
+    pub rail_receipt_hash: HashValue,
+    pub settlement_status: PaymentSettlementStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +78,8 @@ pub struct CapabilityReceipt {
     pub external_ids: Vec<String>,
     #[serde(default)]
     pub artifact_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payment_receipt: Option<Box<PaymentReceiptEvidence>>,
     pub prev_receipt_hash: HashValue,
     pub receipt_hash: HashValue,
 }
@@ -65,6 +100,8 @@ struct ReceiptHashView<'a> {
     side_effects: &'a [SideEffectClass],
     external_ids: &'a [String],
     artifact_refs: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payment_receipt: Option<&'a PaymentReceiptEvidence>,
     prev_receipt_hash: &'a HashValue,
 }
 
@@ -85,6 +122,7 @@ impl<'a> From<&'a CapabilityReceipt> for ReceiptHashView<'a> {
             side_effects: &receipt.side_effects,
             external_ids: &receipt.external_ids,
             artifact_refs: &receipt.artifact_refs,
+            payment_receipt: receipt.payment_receipt.as_deref(),
             prev_receipt_hash: &receipt.prev_receipt_hash,
         }
     }
@@ -130,6 +168,7 @@ impl ReceiptLedger {
             side_effects: input.side_effects,
             external_ids: input.external_ids,
             artifact_refs: input.artifact_refs,
+            payment_receipt: input.payment_receipt,
             prev_receipt_hash,
             receipt_hash: String::new(),
         };

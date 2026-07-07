@@ -21,6 +21,29 @@
     "side_effects": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/side_effect_class" } },
     "external_ids": { "type": "array", "items": { "type": "string" } },
     "artifact_refs": { "type": "array", "items": { "type": "string" } },
+    "payment_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest_hash", "mandate_id", "rail", "adapter_id", "asset", "amount_minor_units", "counterparty_ref", "counterparty_binding_hash", "purpose", "payment_idempotency_key", "envelope_format", "envelope_hash", "rail_receipt_hash", "settlement_status"],
+      "properties": {
+        "manifest_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "mandate_id": { "type": "string", "minLength": 1 },
+        "rail": { "type": "string", "minLength": 1 },
+        "adapter_id": { "type": "string", "minLength": 1 },
+        "adapter_version": { "type": "string", "minLength": 1 },
+        "asset": { "type": "string", "minLength": 1 },
+        "amount_minor_units": { "$ref": "common.schema.json#/$defs/uint" },
+        "counterparty_ref": { "type": "string", "minLength": 1 },
+        "counterparty_binding_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "purpose": { "type": "string", "minLength": 1 },
+        "payment_idempotency_key": { "type": "string", "minLength": 1 },
+        "envelope_format": { "type": "string", "minLength": 1 },
+        "envelope_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "rail_receipt_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "settlement_status": { "enum": ["submitted", "settled", "failed", "canceled"] },
+        "settled_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+      }
+    },
     "prev_receipt_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "receipt_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
   }

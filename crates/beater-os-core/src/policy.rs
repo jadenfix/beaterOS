@@ -59,6 +59,7 @@ struct EffectivePolicy {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PaymentMandateAdmission {
     approval_required: bool,
+    receipt_required: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -342,6 +343,12 @@ impl PolicyEngine {
         }
         if payment_mandate_admission.is_some() {
             matched_rules.push("payment_mandate_approval_threshold_checked".to_string());
+        }
+        if payment_mandate_admission
+            .as_ref()
+            .is_some_and(|admission| admission.receipt_required)
+        {
+            matched_rules.push("payment_mandate_receipt_requirement_checked".to_string());
         }
 
         if dangerous_untrusted_instruction(manifest)
@@ -650,9 +657,18 @@ fn payment_authorized_by_mandate(
     {
         return Err("payment intent envelope format is not allowed by mandate".to_string());
     }
+    let receipt_required = match mandate.receipt_requirement.as_str() {
+        "required" => true,
+        other => {
+            return Err(format!(
+                "payment mandate receipt_requirement {other:?} is not supported"
+            ));
+        }
+    };
 
     Ok(PaymentMandateAdmission {
         approval_required: intent.amount_minor_units > mandate.approval_threshold_minor_units,
+        receipt_required,
     })
 }
 

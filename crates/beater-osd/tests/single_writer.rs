@@ -97,6 +97,7 @@ fn receipt_input(action_id: &str) -> CapabilityReceiptInput {
         side_effects: Vec::new(),
         external_ids: Vec::new(),
         artifact_refs: Vec::new(),
+        payment_receipt: None,
     }
 }
 
