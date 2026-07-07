@@ -399,6 +399,15 @@ impl Store {
                     "resume session",
                 ));
             }
+            if matches!(transition, SessionTransition::Pause)
+                && !admission_state.open_execution_leases.is_empty()
+            {
+                return Err(open_execution_lease_refusal(
+                    session_id,
+                    &admission_state.open_execution_leases,
+                    "pause session",
+                ));
+            }
             if matches!(transition, SessionTransition::Cancel)
                 && !admission_state.open_execution_leases.is_empty()
             {
@@ -966,6 +975,70 @@ impl Store {
         })
     }
 
+    /// Atomically claim a latest-allowed execute action by appending a durable
+    /// execution lease without running the tool inline. The same journal replay
+    /// invariants as [`Self::execute_and_append_receipt`] are enforced under
+    /// the session lock, so stale scheduler workers cannot claim already
+    /// receipted, reconciled, denied, or already-leased actions.
+    pub fn claim_execution_lease(
+        &self,
+        session_id: &str,
+        lease: ExecutionLease,
+        _created_at: DateTime<Utc>,
+    ) -> DaemonResult<ExecutionLeaseOutcome> {
+        self.with_session_lock(session_id, || {
+            let mut journal = self.load_journal_unlocked(session_id)?;
+            let outcome =
+                self.append_execution_lease_claim_unlocked(session_id, &mut journal, lease)?;
+            Ok(outcome)
+        })
+    }
+
+    /// Complete a previously claimed execution lease with a receipt. The lease
+    /// must still be open and match `lease_id`; core journal causality verifies
+    /// timing, target, tool, input digest, side-effect, and receipt-chain
+    /// compatibility before the append is accepted.
+    pub fn append_receipt_for_execution_lease(
+        &self,
+        session_id: &str,
+        lease_id: &str,
+        input: CapabilityReceiptInput,
+        _created_at: DateTime<Utc>,
+    ) -> DaemonResult<ReceiptAppendOutcome> {
+        self.with_session_lock(session_id, || {
+            let journal = self.load_journal_unlocked(session_id)?;
+            let projection = project_journal(session_id, &journal)?;
+            ensure_session_running(&projection.session)?;
+            let admission_state = admission_state_from_journal(session_id, &journal)?;
+            let open_lease = admission_state
+                .open_execution_leases
+                .values()
+                .find(|lease| lease.lease_id == lease_id)
+                .ok_or_else(|| {
+                    DaemonError::Refused(format!("execution lease {lease_id} is not open"))
+                })?;
+            if open_lease.action_id != input.action_id {
+                return Err(DaemonError::Refused(format!(
+                    "receipt for action {} does not match execution lease {} action {}",
+                    input.action_id, lease_id, open_lease.action_id
+                )));
+            }
+            let mut ledger = self.receipt_ledger_from_journal_unlocked(session_id)?;
+            let receipt = ledger.append(input)?;
+            let receipt_record = self.append_event_unlocked(
+                session_id,
+                JournalEvent::ReceiptAppended {
+                    receipt: receipt.clone(),
+                },
+                Utc::now(),
+            )?;
+            Ok(ReceiptAppendOutcome {
+                receipt_record,
+                receipt,
+            })
+        })
+    }
+
     /// Append a durable execution lease, run one execution callback while
     /// holding the per-session daemon lock, then append the returned receipt
     /// input before releasing the lock.
@@ -985,18 +1058,53 @@ impl Store {
         E: From<DaemonError>,
     {
         let _lock = self.acquire_session_lock(session_id).map_err(E::from)?;
+        let mut journal = self.load_journal_unlocked(session_id).map_err(E::from)?;
+        let lease_outcome = self
+            .append_execution_lease_claim_unlocked(session_id, &mut journal, lease)
+            .map_err(E::from)?;
+        let projection = project_journal(session_id, &journal).map_err(E::from)?;
+        let (input, outcome) = execute(&projection)?;
+        let mut ledger = self
+            .receipt_ledger_from_journal_unlocked(session_id)
+            .map_err(E::from)?;
+        let receipt = ledger
+            .append(input)
+            .map_err(DaemonError::from)
+            .map_err(E::from)?;
+        let receipt_record = self
+            .append_event_unlocked(
+                session_id,
+                JournalEvent::ReceiptAppended {
+                    receipt: receipt.clone(),
+                },
+                Utc::now(),
+            )
+            .map_err(E::from)?;
+        Ok((
+            lease_outcome,
+            ReceiptAppendOutcome {
+                receipt_record,
+                receipt,
+            },
+            outcome,
+        ))
+    }
+
+    fn append_execution_lease_claim_unlocked(
+        &self,
+        session_id: &str,
+        journal: &mut InMemoryJournal,
+        mut lease: ExecutionLease,
+    ) -> DaemonResult<ExecutionLeaseOutcome> {
         if lease.session_id != session_id {
             return Err(DaemonError::Refused(format!(
                 "execution lease {} is bound to session {}, not {session_id}",
                 lease.lease_id, lease.session_id
-            ))
-            .into());
+            )));
         }
-        let mut journal = self.load_journal_unlocked(session_id).map_err(E::from)?;
-        let projection = project_journal(session_id, &journal).map_err(E::from)?;
-        ensure_session_running(&projection.session).map_err(E::from)?;
-        let admission_state =
-            admission_state_from_journal(session_id, &journal).map_err(E::from)?;
+        let projection = project_journal(session_id, journal)?;
+        ensure_session_running(&projection.session)?;
+        let admission_state = admission_state_from_journal(session_id, journal)?;
         if admission_state
             .open_execution_leases
             .contains_key(&lease.action_id)
@@ -1004,8 +1112,7 @@ impl Store {
             return Err(DaemonError::Refused(format!(
                 "action {} already has an open execution lease",
                 lease.action_id
-            ))
-            .into());
+            )));
         }
         if admission_state
             .reconciled_execution_actions
@@ -1014,23 +1121,20 @@ impl Store {
             return Err(DaemonError::Refused(format!(
                 "action {} has an outcome-unknown execution lease reconciliation and cannot be re-executed",
                 lease.action_id
-            ))
-            .into());
+            )));
         }
         if !admission_state.open_execution_leases.is_empty() {
             return Err(open_execution_lease_refusal(
                 session_id,
                 &admission_state.open_execution_leases,
                 "issue execution lease",
-            )
-            .into());
+            ));
         }
         if admission_state.receipted_actions.contains(&lease.action_id) {
             return Err(DaemonError::Refused(format!(
                 "action {} already has a receipt and cannot be re-executed",
                 lease.action_id
-            ))
-            .into());
+            )));
         }
         let decision = admission_state
             .latest_decisions
@@ -1040,28 +1144,24 @@ impl Store {
                     "action {} has no policy decision for execution lease",
                     lease.action_id
                 ))
-            })
-            .map_err(E::from)?;
+            })?;
         if decision.result != DecisionResult::Allowed {
             return Err(DaemonError::Refused(format!(
                 "action {} latest policy decision is not allowed",
                 lease.action_id
-            ))
-            .into());
+            )));
         }
         if decision.decision_id != lease.decision_id {
             return Err(DaemonError::Refused(format!(
                 "execution lease {} decision {} does not match latest decision {} for action {}",
                 lease.lease_id, lease.decision_id, decision.decision_id, lease.action_id
-            ))
-            .into());
+            )));
         }
         if decision.manifest_hash != lease.manifest_hash {
             return Err(DaemonError::Refused(format!(
                 "execution lease {} manifest hash does not match decision {}",
                 lease.lease_id, decision.decision_id
-            ))
-            .into());
+            )));
         }
         let proposal = admission_state
             .proposals
@@ -1071,22 +1171,19 @@ impl Store {
                     "action {} has no proposed manifest for execution lease",
                     lease.action_id
                 ))
-            })
-            .map_err(E::from)?;
+            })?;
         let manifest_hash = proposal.manifest.digest().map_err(DaemonError::from)?;
         if manifest_hash != decision.manifest_hash {
             return Err(DaemonError::Refused(format!(
                 "action {} manifest hash no longer matches latest decision {}",
                 lease.action_id, decision.decision_id
-            ))
-            .into());
+            )));
         }
         if proposal.manifest.tool_id != lease.tool_id {
             return Err(DaemonError::Refused(format!(
                 "execution lease {} tool {} does not match manifest tool {}",
                 lease.lease_id, lease.tool_id, proposal.manifest.tool_id
-            ))
-            .into());
+            )));
         }
         let admitted_target = proposal
             .manifest
@@ -1097,30 +1194,26 @@ impl Store {
             return Err(DaemonError::Refused(format!(
                 "execution lease {} target does not match admitted manifest target",
                 lease.lease_id
-            ))
-            .into());
+            )));
         }
         if proposal.manifest.required_grants != lease.required_grants {
             return Err(DaemonError::Refused(format!(
                 "execution lease {} grants do not match admitted manifest grants",
                 lease.lease_id
-            ))
-            .into());
+            )));
         }
         if proposal.manifest.requested_budget != lease.requested_budget {
             return Err(DaemonError::Refused(format!(
                 "execution lease {} budget does not match admitted manifest budget",
                 lease.lease_id
-            ))
-            .into());
+            )));
         }
         let lease_window = lease.expires_at.signed_duration_since(lease.leased_at);
         if lease_window <= TimeDelta::zero() {
             return Err(DaemonError::Refused(format!(
                 "execution lease {} has a non-positive duration",
                 lease.lease_id
-            ))
-            .into());
+            )));
         }
         let requested_wall_ms = lease.requested_budget.max_wall_ms.ok_or_else(|| {
             DaemonError::Refused(format!(
@@ -1147,8 +1240,7 @@ impl Store {
             return Err(DaemonError::Refused(format!(
                 "execution lease {} duration exceeds requested wall budget plus daemon overhead grace",
                 lease.lease_id
-            ))
-            .into());
+            )));
         }
         let lease_issued_at = Utc::now();
         lease.leased_at = lease_issued_at;
@@ -1159,8 +1251,7 @@ impl Store {
                     "execution lease {} expiration overflowed daemon time",
                     lease.lease_id
                 ))
-            })
-            .map_err(E::from)?;
+            })?;
         let lease_record = journal
             .append(
                 JournalEvent::ExecutionLeaseIssued {
@@ -1168,43 +1259,13 @@ impl Store {
                 },
                 lease_issued_at,
             )
-            .map_err(DaemonError::from)
-            .map_err(E::from)?;
-        journal
-            .verify_chain()
-            .map_err(DaemonError::from)
-            .map_err(E::from)?;
-        self.write_journal_record_unlocked(session_id, &lease_record)
-            .map_err(E::from)?;
-        let projection = project_journal(session_id, &journal).map_err(E::from)?;
-        let (input, outcome) = execute(&projection)?;
-        let mut ledger = self
-            .receipt_ledger_from_journal_unlocked(session_id)
-            .map_err(E::from)?;
-        let receipt = ledger
-            .append(input)
-            .map_err(DaemonError::from)
-            .map_err(E::from)?;
-        let receipt_record = self
-            .append_event_unlocked(
-                session_id,
-                JournalEvent::ReceiptAppended {
-                    receipt: receipt.clone(),
-                },
-                Utc::now(),
-            )
-            .map_err(E::from)?;
-        Ok((
-            ExecutionLeaseOutcome {
-                lease_record,
-                lease,
-            },
-            ReceiptAppendOutcome {
-                receipt_record,
-                receipt,
-            },
-            outcome,
-        ))
+            .map_err(DaemonError::from)?;
+        journal.verify_chain().map_err(DaemonError::from)?;
+        self.write_journal_record_unlocked(session_id, &lease_record)?;
+        Ok(ExecutionLeaseOutcome {
+            lease_record,
+            lease,
+        })
     }
 
     /// Load and verify a session journal under the writer lock so readers never
