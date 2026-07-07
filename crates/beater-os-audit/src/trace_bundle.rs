@@ -12,7 +12,6 @@ use beater_os_core::{
     JournalRecord, PaymentMandate, PolicyDecision, SimulationEvidence,
 };
 use serde::Serialize;
-use serde_json::Value;
 
 /// A self-contained trace for one session run plus its hash-linked journal and
 /// receipt chains.
@@ -35,26 +34,7 @@ pub struct TraceBundle {
 
 /// Serialize a full trace bundle to pretty JSON.
 pub fn trace_bundle_to_json(bundle: &TraceBundle) -> Result<String, serde_json::Error> {
-    let mut value = serde_json::to_value(bundle)?;
-    prune_nulls(&mut value);
-    serde_json::to_string_pretty(&value)
-}
-
-fn prune_nulls(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            map.retain(|_, child| {
-                prune_nulls(child);
-                !child.is_null()
-            });
-        }
-        Value::Array(items) => {
-            for item in items {
-                prune_nulls(item);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
+    serde_json::to_string_pretty(bundle)
 }
 
 #[cfg(test)]

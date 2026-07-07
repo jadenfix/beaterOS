@@ -58,17 +58,6 @@ fn ok(home: &str, args: &[&str]) -> String {
     }
 }
 
-fn value_contains_null(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Null => true,
-        serde_json::Value::Array(items) => items.iter().any(value_contains_null),
-        serde_json::Value::Object(map) => map.values().any(value_contains_null),
-        serde_json::Value::Bool(_)
-        | serde_json::Value::Number(_)
-        | serde_json::Value::String(_) => false,
-    }
-}
-
 #[test]
 fn full_coding_workflow_end_to_end() {
     let home = TempHome::new();
@@ -355,8 +344,8 @@ fn trace_export_emits_schema_shaped_live_bundle() {
     );
     assert!(json["journal"].as_array().expect("journal array").len() >= 4);
     assert!(
-        !value_contains_null(&json),
-        "trace export should omit null-valued optional fields: {exported}"
+        json["sessions"][0]["memory_scope"].is_null(),
+        "trace export should preserve core wire nulls for faithful replay: {exported}"
     );
 }
 
