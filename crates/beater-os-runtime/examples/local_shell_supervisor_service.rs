@@ -6,8 +6,8 @@ use std::thread;
 use std::time::Duration;
 
 use beater_os_core::{
-    ActionKind, Budget, CapabilitySelector, DataClass, ResourceKind, RiskClass, SideEffectClass,
-    TaintLabel,
+    ActionKind, Budget, CapabilitySelector, DataClass, GrantConstraints, ResourceKind, RiskClass,
+    SideEffectClass, TaintLabel,
 };
 use beater_os_runtime::{
     AgentRuntime, GrantRequest, RuntimeBundle, RuntimeStep, SessionStart, default_root_grant_id,
@@ -98,6 +98,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     })
     .collect();
 
+    let mut grant = GrantRequest::new(ResourceKind::FilePath, "*", [ActionKind::Execute]);
+    grant.constraints = GrantConstraints {
+        path_prefixes: BTreeSet::from([cwd.clone()]),
+        ..Default::default()
+    };
     let bundle = runtime.run_bundle(RuntimeBundle {
         session_id: Some(SESSION_ID.to_string()),
         session: Some(SessionStart::new(
@@ -105,11 +110,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "workspace:runtime-supervisor-service-smoke",
             "prove bounded runtime worker supervisor service",
         )),
-        grants: vec![GrantRequest::new(
-            ResourceKind::FilePath,
-            cwd.clone(),
-            [ActionKind::Execute],
-        )],
+        grants: vec![grant],
         steps,
     })?;
     if bundle.projection.runnable_pending_actions != 2 {
